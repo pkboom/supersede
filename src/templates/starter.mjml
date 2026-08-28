@@ -1,0 +1,12 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-image src="https://placehold.co/600x300" alt="Hero" />
+        <mj-text font-size="24px" font-weight="bold">Welcome</mj-text>
+        <mj-text>Replace this text with your content.</mj-text>
+        <mj-button href="https://example.com">Get Started</mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

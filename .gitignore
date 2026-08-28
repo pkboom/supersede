@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.env
+.env.*
+.omc/
+
+# Persistent app workspace (created by `npm start`).
+workspace/
+
+# Legacy dev workspace from the pre-`npm start` shape; harmless to leave listed.
+.dev-workspace/
+
+# Vite intermediate build (web/ source-level output, if any)
+web/dist/
+
+# SQLite data dir (per-deploy persistent disk; never committed).
+data/
+
+# Drizzle migration metadata (kept out of VCS; SQL files in drizzle/migrations/ ARE committed).
+drizzle/migrations/meta/
+
+# OS junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
