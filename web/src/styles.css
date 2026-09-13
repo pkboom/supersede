@@ -803,8 +803,26 @@ code {
   box-sizing: border-box;
 }
 
+/*
+ * Anchored to the TOP-RIGHT of the selected overlay box.
+ *
+ * It previously resolved against `top: 0; left: 0` — `.overlay-toolbar-wrap`
+ * carries no CSS, so the toolbar fell through to the overlay box's own top-left
+ * corner and sat ON TOP of the block's content. Measured: a 589px-wide text
+ * block had its leftmost 91px covered, so selecting a text block hid the start
+ * of the very text you were about to edit ("FIRST TEXT BLOCK" read as "BLOCK").
+ *
+ * Right-aligned because email body copy is overwhelmingly left-aligned, so the
+ * right edge is the side most likely to be empty. Kept INSIDE the box rather
+ * than floating above it (as `.overlay-breadcrumb` does) because a block at the
+ * very top of the canvas would push a floating toolbar outside the overlay
+ * bounds; the breadcrumb already occupies that space on the left in any case.
+ */
 .selection-toolbar {
   position: absolute;
+  top: 0;
+  right: 0;
+  left: auto;
   display: inline-flex;
   gap: 0.15rem;
   background: var(--surface);

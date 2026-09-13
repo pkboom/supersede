@@ -43,7 +43,7 @@ Run `npm test` for Vitest and `npm run typecheck` for TypeScript checks (both se
 
 ## Browser query input
 
-The web UI includes a **Claude pane** on the right side where you can type natural-language prompts directly in the browser (e.g. "Make the subject line bold"). Prompts submit via `POST /api/query` and stream back token-by-token over WebSocket — each tab sees only its own turn's tokens while MJML updates broadcast to all connected tabs.
+The web UI includes a **Claude pane** in the left sidebar where you can type natural-language prompts directly in the browser (e.g. "Make the subject line bold"). Prompts submit via `POST /api/query` and stream back token-by-token over WebSocket — each tab sees only its own turn's tokens while MJML updates broadcast to all connected tabs.
 
 ## Component design system (experimental)
 
