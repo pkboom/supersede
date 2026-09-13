@@ -310,3 +310,32 @@ describe("mjml's own errors are the authoritative survivor check", () => {
     }
   });
 });
+
+describe("compile failures are the client's problem, not a 500", () => {
+  it("returns 422 for structurally invalid MJML, not 500", async () => {
+    // <mj-style> in an illegal position makes mjml throw
+    // "component.htmlAttributes is not a function". Previously a 500, which
+    // says "we broke" about a document only the caller can fix.
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-style>.a{}</mj-style></mj-column></mj-section></mj-body></mjml>`;
+    const { status } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(status).toBe(422);
+  });
+
+  it("returns 422 for input that is not MJML at all", async () => {
+    const { status } = await render(appWith(new InMemoryComponentStore()), "not mjml <<<");
+    expect(status).toBe(422);
+  });
+
+  it("passes the underlying message through so a real mjml bug stays diagnosable", async () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-style>.a{}</mj-style></mj-column></mj-section></mj-body></mjml>`;
+    const { body } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(body.error as string).toMatch(/could not be compiled/i);
+    expect((body.error as string).length).toBeGreaterThan("MJML could not be compiled: ".length);
+  });
+
+  it("still renders a valid document", async () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-text>ok</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    const { status } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(status).toBe(200);
+  });
+});

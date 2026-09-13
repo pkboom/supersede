@@ -232,8 +232,25 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
         mjmlErrors,
       });
     } catch (err) {
-      c.status(500);
-      return c.json({ error: `MJML compile failed: ${(err as Error).message}` });
+      // A compile failure here means mjml could not turn THIS REQUEST'S source
+      // into HTML, and that source is the only input this route has. So it is
+      // the client's document that needs changing, which makes it a 422 like
+      // every other bad-input path here — not a 500, which should mean "we
+      // broke" and which a caller can do nothing about.
+      //
+      // Matching on the message text was tried and is the wrong shape: mjml
+      // surfaces structural problems inconsistently ("Malformed MJML..." for a
+      // parse failure, but "component.htmlAttributes is not a function" for
+      // <mj-style> in an illegal position). Both are the same class of problem
+      // and pattern-matching prose to tell them apart would need updating every
+      // time mjml rewords an error.
+      //
+      // The message is passed through verbatim so a genuine mjml bug is still
+      // diagnosable rather than flattened into a generic 4xx.
+      c.status(422);
+      return c.json({
+        error: `MJML could not be compiled: ${(err as Error).message}`,
+      });
     }
   });
 
