@@ -24,5 +24,10 @@ Thumbs.db
 
 # Scratch directories used by review/verification agents. Never source.
 .verif-probe/
-.plan/
-.plan-research/
+
+# The .plan/ design docs ARE committed — they carry the reasoning behind
+# decisions ideas/PLAN-design-system.md only states the conclusion of, and a
+# decision whose reasoning is untracked becomes folklore. Throwaway probe
+# scripts stay ignored: they are one-shot diagnostics, and .plan/scratch has
+# its own vitest.config.ts that must never be collected by the real suite.
+.plan/scratch/
