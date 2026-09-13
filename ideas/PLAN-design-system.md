@@ -980,10 +980,40 @@ path-to-path join they now have no reason to travel at all.
 same component produce identical chains**, and "which instance did I click?" — the exact question
 the field exists to answer — is unanswerable.
 
-**The survivor guard must use a scanner with a strictly more permissive failure mode than the
-substitution scanner.** Sharing one scanner makes the guard a **tautology on the expander's own
-fixpoint**: it can only find what the substituter already recognised, which is precisely the set
-that never survives.
+**Let the compiler be the authority — this is the guarantee. Scanner independence is only a
+supporting measure.**
+
+> **CORRECTION to an earlier version of this line.** It said the survivor guard "must use a scanner
+> with a strictly more permissive failure mode than the substitution scanner." **True but
+> insufficient, and misleading as written** — that was done, and the leak survived anyway, because
+> independence over *tag well-formedness* says nothing about agreement over *comment boundaries*.
+> **Two scanners that share any grammar assumption share its bugs.**
+
+**The rule, which closes the class rather than an instance:** every check implemented by re-parsing
+MJML ourselves is only as good as our agreement with **htmlparser2** — the parser mjml actually uses
+via `mjml-parser-xml` — and that agreement **cannot be established once.** The expander,
+`locateInstances`, `stampPaths` and the block parser are all **second opinions about a grammar
+someone else owns.**
+
+So `render.ts` must escalate to **422 whenever mjml's own `result.errors` mention `mj-component`.**
+A local guard proves a reference survived *our* scan; mjml's errors prove it survived **the
+compiler**, which is the only opinion that decides what reaches the recipient. Whatever the next
+parser disagreement turns out to be, it then fails loudly instead of shipping a footerless email.
+
+> **Three rounds of review found three leaks of exactly this class**, all `/api/render` returning
+> **200 with `<mj-component/>` content silently missing**: (1) a backward `lastIndexOf("<!--")`
+> fooled by `<!--` inside an attribute value and by an unterminated comment; (2) a forward rewrite
+> that still shared comment logic with the guard — **the tautology moved from tag-shape to
+> comment-shape rather than going away**; (3) htmlparser2 closes `<!-->` and `<!--->` **immediately**
+> (`Tokenizer.js`, `sequenceIndex = 2`, comment *"Allow short comments (eg. `<!-->`)"*), while the
+> local scan searched `-->` from `lt+4`, missed it, and ran the comment on to the next `-->` anywhere
+> later in the document — **swallowing every reference in between**. Same round: inside `<script>`,
+> `<style>`, `<title>` and `<textarea>` the content is raw *text*, so `<!--` opens no comment there
+> either.
+
+**This retro-justifies §0.5.** In at least one of those leaks **mjml did report the error and the
+route returned 200 anyway**, because nobody read `result.errors`. Reading them was the right
+instinct; **the missing half was acting on them.**
 
 **`instancePath` must be a chain, not a string — components nest.** The schema permits
 `<mj-component/>` inside a component body with a depth cap of 5, so one expanded path can sit inside
@@ -1265,6 +1295,14 @@ switching triples how often users do this, so `useUnsavedGuard` is **required, n
 - **`validationLevel: "soft"` (`render.ts:60`) is load-bearing and undocumented.** It strips
   `data-*` stamps from rendered output (desirable) but reports them in `result.errors`, which
   `render.ts:60-63` reaches via a **type assertion** (not a destructuring) and never reads. Under `strict` it throws.
+
+- **A guard's mirror defect is the FALSE REJECTION, and one shipped.** Throwing on *any*
+  unterminated `<!--` rejected templates that carried a stray one and **no components at all** —
+  inputs mjml renders without complaint. **Fail-closed is right for a guard, but only over the
+  inputs the guard is about.** Scope it to documents that actually contain the thing being guarded.
+- **Scan comment ranges ONCE per string and thread them through — never recompute per reference.**
+  Recomputing made a 200-reference document take **8.07s inside `/api/render`**, a route the preview
+  pane hits on a 200ms keystroke debounce. Threaded, the same document is **23ms**.
 
 ### Stale documentation — corrected
 - **The `TODO(serializer)` in `types.ts` is stale.** `serializer.ts` already emits `if (doc.head)`

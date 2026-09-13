@@ -664,3 +664,66 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 });
+
+describe("unterminated comments in component BODIES (the fourth silent-200 path)", () => {
+  // This is the one content-loss path the compiler-authority check in render.ts
+  // structurally CANNOT catch: the reference expands successfully, so mjml
+  // reports nothing, while the body's stray `<!--` truncates every template
+  // that references it. One bad publish silently poisons the whole corpus.
+
+  it("publish() rejects an unterminated comment in a body", () => {
+    const s = new InMemoryComponentStore();
+    expect(() => s.publish("c/bad", `<mj-raw><!-- oops</mj-raw>`)).toThrow(
+      UnterminatedCommentError
+    );
+  });
+
+  it("expansion still catches a body from a store that did not validate", () => {
+    // ComponentStore is an interface; a body can reach the expander from an
+    // implementation that never called assertSingleRoot. Publish-time
+    // validation alone is therefore not sufficient.
+    const unvalidated: ComponentStore = {
+      get: () => ({
+        componentId: "c/bad",
+        revision: 1,
+        body: `<mj-raw><!-- oops</mj-raw>`,
+        publishedAt: new Date(),
+      }),
+      latest: () => undefined,
+      list: () => [],
+    };
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-component component-id="c/bad" revision="1" /><mj-text>SIBLING</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    expect(() => expand(src, unvalidated)).toThrow(UnterminatedCommentError);
+  });
+});
+
+describe("CDATA is not markup", () => {
+  it("a CDATA section containing > and <!-- does not create a phantom comment", () => {
+    // mjml enables recognizeCDATA. Without handling it, the generic tag-skip
+    // stopped at the `>` INSIDE the CDATA and read the following `<!--` as a
+    // comment opener — which both hid a reference AND falsely rejected a
+    // template mjml compiles.
+    const s = new InMemoryComponentStore();
+    s.publish("c/x", `<mj-text>CMARK</mj-text>`);
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-raw><![CDATA[a>b<!--]]></mj-raw><mj-component component-id="c/x" revision="1" /><!-- t --></mj-column></mj-section></mj-body></mjml>`;
+    expect(expand(src, s).mjml).toContain("CMARK");
+  });
+});
+
+describe("the unterminated-comment rejection is scoped to references it could hide", () => {
+  const store = () => {
+    const s = new InMemoryComponentStore();
+    s.publish("c/x", `<mj-text>CMARK</mj-text>`);
+    return s;
+  };
+
+  it("does NOT reject when every reference precedes the stray <!--", () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-component component-id="c/x" revision="1" /></mj-column></mj-section></mj-body><!-- trailing</mjml>`;
+    expect(() => expand(src, store())).not.toThrow();
+  });
+
+  it("DOES reject when a reference sits after the stray <!--", () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><!-- note<mj-component component-id="c/x" revision="1" /></mj-column></mj-section></mj-body></mjml>`;
+    expect(() => expand(src, store())).toThrow(UnterminatedCommentError);
+  });
+});

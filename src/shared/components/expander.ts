@@ -382,11 +382,14 @@ export function expand(
   // that the preview pane hits on a 200ms keystroke debounce.
   const scan = scanComments(source);
 
-  // An unterminated comment is only a problem if it could HIDE a reference.
-  // Throwing unconditionally rejected templates that carry a stray `<!--` and no
-  // components at all — which mjml renders without complaint.
-  if (scan.unterminatedAt !== undefined && source.includes(`<${COMPONENT_TAG}`)) {
-    throw new UnterminatedCommentError(scan.unterminatedAt);
+  // An unterminated comment is only a problem if it could HIDE a reference —
+  // that is, if a reference sits at or after it. Throwing whenever the document
+  // merely CONTAINS the tag anywhere rejected templates whose references all
+  // precede the stray `<!--`, and even ones where the tag name appears only
+  // inside the comment text.
+  if (scan.unterminatedAt !== undefined) {
+    const hidden = source.indexOf(`<${COMPONENT_TAG}`, scan.unterminatedAt);
+    if (hidden !== -1) throw new UnterminatedCommentError(scan.unterminatedAt);
   }
 
   const out = expandInto(source, store, pins, regions, [], 0, scan.ranges);
@@ -483,6 +486,20 @@ function expandInto(
     // nested region's `start` equalled its parent's and `mjml.slice(start, end)`
     // did not contain the component.
     const nestedFrom = regions.length;
+    // The body is a different string, so it needs its own comment ranges.
+    //
+    // Its `unterminatedAt` is checked too, and that is not redundant with the
+    // publish-time check in `assertSingleRoot`: a ComponentStore is an
+    // interface, and a body can reach here from an implementation that never
+    // validated. This is the one failure the compiler-authority check in
+    // render.ts cannot catch — the reference DID expand, so mjml reports
+    // nothing, while the body's stray `<!--` silently truncates every template
+    // that references it.
+    const bodyScan = scanComments(body);
+    if (bodyScan.unterminatedAt !== undefined) {
+      throw new UnterminatedCommentError(bodyScan.unterminatedAt);
+    }
+
     const expandedBody = expandInto(
       body,
       store,
@@ -490,8 +507,7 @@ function expandInto(
       regions,
       chain,
       depth + 1,
-      // The body is a different string, so it needs its own comment ranges.
-      scanComments(body).ranges
+      bodyScan.ranges
     );
 
     const start = out.length;

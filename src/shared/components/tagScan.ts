@@ -46,7 +46,12 @@ export interface CommentScan {
  * so must we, or `<script><!--</script>` starts a comment here that never
  * started there, swallowing every reference until the next `-->`.
  */
-const RAW_TEXT_ELEMENTS = ["script", "style", "title", "textarea"];
+const RAW_TEXT_ELEMENTS = ["script", "style", "title"];
+// `textarea` is deliberately NOT listed. htmlparser2 treats it as raw text only
+// in HTML mode; under the XML options mjml uses it does not, so skipping its
+// content here made us call live what the real parser comments out. The
+// direction was fail-safe, but a second parser that is "safely wrong" is still
+// wrong, and the next person to read this list should not learn the wrong rule.
 
 /**
  * Byte ranges covered by XML comments.
@@ -80,6 +85,17 @@ export function scanComments(src: string): CommentScan {
   while (i < src.length) {
     const lt = src.indexOf("<", i);
     if (lt === -1) break;
+
+    // CDATA is NOT markup: `<!--` inside it opens no comment, and mjml enables
+    // it (recognizeCDATA: true). Without this the generic tag-skip below stops
+    // at the first `>` INSIDE the CDATA, so a section containing both `>` and
+    // `<!--` leaks a phantom comment opener. That produced both a missed
+    // expansion and — the mirror defect — a 422 on a template mjml compiles.
+    if (src.startsWith("<![CDATA[", lt)) {
+      const close = src.indexOf("]]>", lt + 9);
+      i = close === -1 ? src.length : close + 3;
+      continue;
+    }
 
     if (src.startsWith("<!--", lt)) {
       // From lt + 2, so the opener's own `--` can close a short comment.

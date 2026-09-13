@@ -13,7 +13,13 @@ import {
   type ComponentStore,
   ExpansionError,
 } from "./types.js";
-import { findAllTags, findElementEnd, readRootTag } from "./tagScan.js";
+import {
+  findAllTags,
+  findElementEnd,
+  readRootTag,
+  scanComments,
+  UnterminatedCommentError,
+} from "./tagScan.js";
 
 /**
  * Validate the single-root invariant.
@@ -27,6 +33,17 @@ export function assertSingleRoot(componentId: string, body: string): void {
   const trimmed = body.trim();
   if (!trimmed) {
     throw new ExpansionError(`Component "${componentId}" has an empty body`);
+  }
+
+  // An unterminated comment in a component BODY is worse than one in a
+  // template: the body is substituted into every template that references it,
+  // so one bad publish silently truncates all of them — and because the
+  // reference itself expanded, mjml reports nothing and the compiler-authority
+  // check has nothing to fire on. Catch it at publish time, where the error can
+  // name the component being edited.
+  const scan = scanComments(trimmed);
+  if (scan.unterminatedAt !== undefined) {
+    throw new UnterminatedCommentError(scan.unterminatedAt);
   }
 
   const root = readRootTag(trimmed);
