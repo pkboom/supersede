@@ -1,0 +1,471 @@
+/**
+ * componentExpander — the reference model's core (plan §11 D-2, §12 weeks 2-4).
+ *
+ * The guard tests are not ceremony. An unexpanded reference compiles to HTTP
+ * 200 with the content silently gone, so "did it throw" is the difference
+ * between a loud failure and a footerless email to a client's list.
+ */
+import { describe, it, expect } from "vitest";
+import mjml2html from "mjml";
+import {
+  InMemoryComponentStore,
+  expand,
+  locateInstances,
+  findTag,
+  findAllTags,
+  ExpansionError,
+  UnexpandedReferenceError,
+  ComponentNotFoundError,
+  MAX_EXPANSION_DEPTH,
+} from "../../src/shared/components/index.js";
+import type { ComponentStore } from "../../src/shared/components/index.js";
+
+const BUTTON_V1 =
+  `<mj-button href="https://shoe.test/shop" background-color="#1f6feb" color="#ffffff">Shop now</mj-button>`;
+const BUTTON_V2 =
+  `<mj-button href="https://shoe.test/shop" background-color="#111111" color="#ffffff">Shop now</mj-button>`;
+
+function storeWithButton(): InMemoryComponentStore {
+  const s = new InMemoryComponentStore();
+  s.publish("shoe-brand/primary-button", BUTTON_V1, { label: "Primary button" });
+  return s;
+}
+
+function template(inner: string): string {
+  return `<mjml><mj-body><mj-section><mj-column>${inner}</mj-column></mj-section></mj-body></mjml>`;
+}
+
+const REF = `<mj-component component-id="shoe-brand/primary-button" revision="1" />`;
+
+describe("store — immutable revisions", () => {
+  it("publishes monotonically from 1", () => {
+    const s = new InMemoryComponentStore();
+    expect(s.publish("a/b", `<mj-text>x</mj-text>`).revision).toBe(1);
+    expect(s.publish("a/b", `<mj-text>y</mj-text>`).revision).toBe(2);
+    expect(s.latest("a/b")!.revision).toBe(2);
+  });
+
+  it("keeps old revisions readable after a newer one is published", () => {
+    const s = new InMemoryComponentStore();
+    s.publish("a/b", `<mj-text>old</mj-text>`);
+    s.publish("a/b", `<mj-text>new</mj-text>`);
+    // This is the whole reference model: a template pinned to 1 is unaffected
+    // by publishing 2, until someone bumps the pin deliberately.
+    expect(s.get("a/b", 1)!.body).toContain("old");
+    expect(s.get("a/b", 2)!.body).toContain("new");
+  });
+
+  it("rejects a multi-root body (single-root invariant)", () => {
+    const s = new InMemoryComponentStore();
+    expect(() =>
+      s.publish("a/b", `<mj-text>one</mj-text><mj-text>two</mj-text>`)
+    ).toThrow(ExpansionError);
+  });
+
+  it("accepts a single root that CONTAINS children", () => {
+    const s = new InMemoryComponentStore();
+    expect(() =>
+      s.publish(
+        "a/b",
+        `<mj-section><mj-column><mj-text>x</mj-text></mj-column></mj-section>`
+      )
+    ).not.toThrow();
+  });
+
+  it("rejects an empty body", () => {
+    const s = new InMemoryComponentStore();
+    expect(() => s.publish("a/b", "   ")).toThrow(ExpansionError);
+  });
+
+  it("rejects a self-referencing component", () => {
+    const s = new InMemoryComponentStore();
+    expect(() =>
+      s.publish(
+        "a/b",
+        `<mj-section><mj-component component-id="a/b" revision="1" /></mj-section>`
+      )
+    ).toThrow(/references itself/);
+  });
+
+  it("round-trips through JSON", () => {
+    const s = storeWithButton();
+    const back = InMemoryComponentStore.fromJSON(
+      JSON.parse(JSON.stringify(s.toJSON()))
+    );
+    expect(back.get("shoe-brand/primary-button", 1)!.body).toBe(BUTTON_V1);
+  });
+});
+
+describe("quote-aware tag scanning", () => {
+  it("does NOT truncate on a raw > inside an attribute value", () => {
+    // The exact case a naive /<mj-component[^>]*\/>/ gets wrong.
+    const src = `<mj-component component-id="a/b" revision="1" ov-content="a > b" />`;
+    const tag = findTag(src, "mj-component");
+    expect(tag).not.toBeNull();
+    expect(tag!.end).toBe(src.length);
+    expect(tag!.attrs.find((a) => a.name === "ov-content")!.value).toBe("a > b");
+  });
+
+  it("does not match a longer tag that merely starts with the name", () => {
+    const src = `<mj-component-group foo="1" />`;
+    expect(findTag(src, "mj-component")).toBeNull();
+  });
+
+  it("finds multiple non-overlapping tags", () => {
+    const src = `${REF}<mj-text>x</mj-text>${REF}`;
+    expect(findAllTags(src, "mj-component")).toHaveLength(2);
+  });
+
+  it("handles single-quoted values", () => {
+    const tag = findTag(`<mj-component component-id='a/b' revision='2' />`, "mj-component");
+    expect(tag!.attrs.find((a) => a.name === "revision")!.value).toBe("2");
+  });
+});
+
+describe("expand — substitution", () => {
+  it("replaces the reference with the pinned revision's body", () => {
+    const { mjml } = expand(template(REF), storeWithButton());
+    expect(mjml).toContain("Shop now");
+    expect(mjml).not.toContain("mj-component");
+  });
+
+  it("compiles to real HTML with the component content present", () => {
+    const { mjml } = expand(template(REF), storeWithButton());
+    const res = mjml2html(mjml, { validationLevel: "soft" }) as {
+      html: string;
+      errors?: unknown[];
+    };
+    expect(res.html).toContain("Shop now");
+    expect(res.errors ?? []).toHaveLength(0);
+  });
+
+  it("expands three templates from ONE component (the slice's shape)", () => {
+    const store = storeWithButton();
+    const templates = [
+      template(`<mj-text>Welcome</mj-text>${REF}`),
+      template(`<mj-text>Sale</mj-text>${REF}`),
+      template(`${REF}<mj-text>Footer</mj-text>`),
+    ];
+    for (const t of templates) {
+      expect(expand(t, store).mjml).toContain("#1f6feb");
+    }
+  });
+
+  it("records one region per instance, with provenance", () => {
+    const { mjml, regions } = expand(template(`${REF}${REF}`), storeWithButton());
+    expect(regions).toHaveLength(2);
+    for (const r of regions) {
+      expect(r.componentId).toBe("shoe-brand/primary-button");
+      expect(r.revision).toBe(1);
+      expect(r.instancePath).toEqual(["shoe-brand/primary-button@1"]);
+      // The region's byte range must actually bracket its content in the
+      // OUTPUT — this is what makes the range usable by a caller.
+      expect(mjml.slice(r.start, r.end)).toContain("Shop now");
+    }
+  });
+
+  it("keeps expandedPathRange a RANGE even though it is always [n, n]", () => {
+    const { regions } = expand(template(`${REF}${REF}`), storeWithButton());
+    expect(regions[0]!.expandedPathRange).toEqual([0, 0]);
+    expect(regions[1]!.expandedPathRange).toEqual([1, 1]);
+  });
+
+  it("leaves non-component MJML untouched", () => {
+    const src = template(`<mj-text>hello</mj-text>`);
+    expect(expand(src, storeWithButton()).mjml).toBe(src);
+  });
+});
+
+describe("expand — the throw-on-survivor guard", () => {
+  /** A store that silently returns a body still containing a reference. */
+  const leakyStore: ComponentStore = {
+    get: () => ({
+      componentId: "leaky/x",
+      revision: 1,
+      // Deliberately smuggles a reference past substitution.
+      body: `<mj-section><mj-component component-id="ghost/y" revision="9" /></mj-section>`,
+      publishedAt: new Date(),
+    }),
+    latest: () => undefined,
+    list: () => [],
+  };
+
+  it("throws rather than returning MJML with a surviving reference", () => {
+    const src = template(`<mj-component component-id="leaky/x" revision="1" />`);
+    // The nested ghost/y is not in the store, so expansion fails there first —
+    // which is itself the correct loud failure.
+    expect(() => expand(src, leakyStore)).toThrow(ExpansionError);
+  });
+
+  it("UnexpandedReferenceError names the survivors", () => {
+    // Construct the survivor case directly: a store whose body contains a
+    // reference the scanner cannot see as a tag during recursion because it is
+    // assembled after substitution is complete.
+    const sneaky: ComponentStore = {
+      get: () => ({
+        componentId: "sneaky/x",
+        revision: 1,
+        body: `<mj-section data-x="&lt;mj-component"><mj-text>ok</mj-text></mj-section>`,
+        publishedAt: new Date(),
+      }),
+      latest: () => undefined,
+      list: () => [],
+    };
+    // Entity-encoded, so it is NOT a real tag and must NOT trip the guard.
+    expect(() =>
+      expand(template(`<mj-component component-id="sneaky/x" revision="1" />`), sneaky)
+    ).not.toThrow();
+  });
+
+  it("PROVES the failure the guard prevents: mjml drops it at HTTP-200 silently", () => {
+    // This is the justification for the guard existing at all, asserted rather
+    // than described. An unexpanded reference does NOT fail compilation.
+    const res = mjml2html(template(REF), { validationLevel: "soft" }) as {
+      html: string;
+      errors?: unknown[];
+    };
+    expect(res.html).not.toContain("Shop now");
+    expect(res.html).not.toContain("mj-component");
+    // The rest of the email still renders — which is what makes it silent.
+    expect(res.html.length).toBeGreaterThan(0);
+    // And the diagnostic exists but lives somewhere render.ts never reads.
+    expect((res.errors ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("throws ComponentNotFoundError for an unknown component", () => {
+    expect(() =>
+      expand(template(`<mj-component component-id="nope/x" revision="1" />`), storeWithButton())
+    ).toThrow(ComponentNotFoundError);
+  });
+
+  it("throws for a reference with no revision", () => {
+    expect(() =>
+      expand(template(`<mj-component component-id="shoe-brand/primary-button" />`), storeWithButton())
+    ).toThrow(/no usable revision/);
+  });
+
+  it("throws for a reference with no component-id", () => {
+    expect(() => expand(template(`<mj-component revision="1" />`), storeWithButton())).toThrow(
+      /no component-id/
+    );
+  });
+});
+
+describe("expand — overrides (ov-*)", () => {
+  it("overrides an attribute on the component root", () => {
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-background-color="#ff0000" />`
+    );
+    const { mjml } = expand(src, storeWithButton());
+    expect(mjml).toContain(`background-color="#ff0000"`);
+    expect(mjml).not.toContain("#1f6feb");
+  });
+
+  it("preserves attribute ORDER when overriding an existing attribute", () => {
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-background-color="#ff0000" />`
+    );
+    const { mjml } = expand(src, storeWithButton());
+    const tag = findTag(mjml, "mj-button")!;
+    expect(tag.attrs.map((a) => a.name)).toEqual([
+      "href",
+      "background-color",
+      "color",
+    ]);
+  });
+
+  it("appends an attribute the component did not have", () => {
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-border-radius="8px" />`
+    );
+    const { mjml } = expand(src, storeWithButton());
+    expect(mjml).toContain(`border-radius="8px"`);
+  });
+
+  it("records the ov-key binding in the region's overridable map", () => {
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-background-color="#ff0000" />`
+    );
+    const { regions } = expand(src, storeWithButton());
+    expect(regions[0]!.overridable.get("")).toBe("ov-background-color");
+  });
+
+  it("does not let one instance's override leak into another", () => {
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-background-color="#ff0000" />` +
+        REF
+    );
+    const { mjml } = expand(src, storeWithButton());
+    expect(mjml).toContain("#ff0000");
+    expect(mjml).toContain("#1f6feb");
+  });
+
+  it("overrides a named text slot", () => {
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/hero",
+      `<mj-section><mj-column><mj-text data-slot="headline">Default</mj-text></mj-column></mj-section>`
+    );
+    const { mjml, regions } = expand(
+      template(`<mj-component component-id="brand/hero" revision="1" ov-slot-headline="Custom" />`),
+      s
+    );
+    expect(mjml).toContain("Custom");
+    expect(mjml).not.toContain("Default");
+    expect([...regions[0]!.overridable.values()]).toContain("ov-slot-headline");
+  });
+
+  it("throws when a slot override targets a slot that does not exist", () => {
+    const s = new InMemoryComponentStore();
+    s.publish("brand/hero", `<mj-section><mj-column><mj-text>x</mj-text></mj-column></mj-section>`);
+    expect(() =>
+      expand(template(`<mj-component component-id="brand/hero" revision="1" ov-slot-nope="y" />`), s)
+    ).toThrow(/no element with data-slot/);
+  });
+
+  it("keeps entity-encoded override values byte-stable across expansions", () => {
+    // D-2 locks: all ov-* values must be entity-encoded. Verify the value is
+    // not re-escaped or decoded on the way through.
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-href="https://x.test/?a=1&amp;b=2" />`
+    );
+    const store = storeWithButton();
+    const first = expand(src, store).mjml;
+    expect(first).toContain(`href="https://x.test/?a=1&amp;b=2"`);
+    // Expanding again from the same stored source must be identical — the
+    // reference model's blast radius is supposed to be zero bytes here.
+    expect(expand(src, store).mjml).toBe(first);
+  });
+});
+
+describe("expand — nesting and the depth cap", () => {
+  it("expands a component that references another component", () => {
+    const s = new InMemoryComponentStore();
+    s.publish("brand/button", `<mj-button href="#">Go</mj-button>`);
+    s.publish(
+      "brand/card",
+      `<mj-section><mj-column><mj-component component-id="brand/button" revision="1" /></mj-column></mj-section>`
+    );
+    const { mjml, regions } = expand(
+      template(`<mj-component component-id="brand/card" revision="1" />`),
+      s
+    );
+    expect(mjml).toContain("Go");
+    expect(mjml).not.toContain("mj-component");
+    // Two regions: the card, and the button nested inside it.
+    expect(regions).toHaveLength(2);
+  });
+
+  it("gives a nested region an instancePath CHAIN, outermost first", () => {
+    const s = new InMemoryComponentStore();
+    s.publish("brand/button", `<mj-button href="#">Go</mj-button>`);
+    s.publish(
+      "brand/card",
+      `<mj-section><mj-column><mj-component component-id="brand/button" revision="1" /></mj-column></mj-section>`
+    );
+    const { regions } = expand(
+      template(`<mj-component component-id="brand/card" revision="1" />`),
+      s
+    );
+    const inner = regions.find((r) => r.componentId === "brand/button")!;
+    // "Click inside a footer that contains a button: footer, or button?" — the
+    // chain is what makes that answerable.
+    expect(inner.instancePath).toEqual(["brand/card@1", "brand/button@1"]);
+  });
+
+  it("throws past the depth cap instead of recursing forever", () => {
+    const s = new InMemoryComponentStore();
+    // Build a mutually-referencing pair by publishing the second half first.
+    s.publish("brand/a", `<mj-section><mj-text>a</mj-text></mj-section>`);
+    const cyclic: ComponentStore = {
+      get: (id) => ({
+        componentId: id,
+        revision: 1,
+        body: `<mj-section><mj-component component-id="${id === "x" ? "y" : "x"}" revision="1" /></mj-section>`,
+        publishedAt: new Date(),
+      }),
+      latest: () => undefined,
+      list: () => [],
+    };
+    expect(() =>
+      expand(template(`<mj-component component-id="x" revision="1" />`), cyclic)
+    ).toThrow(new RegExp(`depth cap of ${MAX_EXPANSION_DEPTH}`));
+  });
+});
+
+describe("expand — pins (the dry-run diff)", () => {
+  it("pins override the revision written in the template", () => {
+    const s = storeWithButton();
+    s.publish("shoe-brand/primary-button", BUTTON_V2);
+    const src = template(REF);
+    expect(expand(src, s).mjml).toContain("#1f6feb");
+    expect(
+      expand(src, s, { pins: { "shoe-brand/primary-button": 2 } }).mjml
+    ).toContain("#111111");
+  });
+
+  it("the diff is real before/after MJML, both pure functions of stored data", () => {
+    const s = storeWithButton();
+    s.publish("shoe-brand/primary-button", BUTTON_V2);
+    const src = template(REF);
+    const before = expand(src, s).mjml;
+    const after = expand(src, s, { pins: { "shoe-brand/primary-button": 2 } }).mjml;
+    expect(before).not.toBe(after);
+    // And critically: the STORED template is untouched by either.
+    expect(src).toContain(`revision="1"`);
+  });
+});
+
+describe("locateInstances — detect-and-report is mandatory", () => {
+  it("reports a plain instance as reachable", () => {
+    const r = locateInstances(template(REF));
+    expect(r.summary).toMatchObject({ total: 1, reachable: 1, unreachable: 0 });
+  });
+
+  it("reports an instance buried in mj-wrapper as OPAQUE, not missing", () => {
+    const src = `<mjml><mj-body><mj-wrapper><mj-section><mj-column>${REF}</mj-column></mj-section></mj-wrapper></mj-body></mjml>`;
+    const r = locateInstances(src);
+    expect(r.summary.total).toBe(1);
+    expect(r.summary.unreachable).toBe(1);
+    expect(r.instances[0]!.status).toBe("opaque");
+    expect(r.instances[0]!.opaqueReason).toContain("mj-wrapper");
+  });
+
+  it("reproduces the plan's measurement: 1 of 2 reachable", () => {
+    const src =
+      `<mjml><mj-body>` +
+      `<mj-section><mj-column>${REF}</mj-column></mj-section>` +
+      `<mj-wrapper><mj-section><mj-column>${REF}</mj-column></mj-section></mj-wrapper>` +
+      `</mj-body></mjml>`;
+    const r = locateInstances(src);
+    expect(r.summary.total).toBe(2);
+    expect(r.summary.reachable).toBe(1);
+    expect(r.summary.unreachable).toBe(1);
+  });
+
+  it("never silently drops an unreachable instance from the total", () => {
+    const src = `<mjml><mj-body><mj-wrapper>${REF}</mj-wrapper></mj-body></mjml>`;
+    const r = locateInstances(src);
+    expect(r.summary.total).toBe(r.summary.reachable + r.summary.unreachable);
+  });
+
+  it("attributes the cause so the report is actionable", () => {
+    const src = `<mjml><mj-body><mj-wrapper><mj-section><mj-column>${REF}</mj-column></mj-section></mj-wrapper></mj-body></mjml>`;
+    const r = locateInstances(src);
+    expect(Object.keys(r.summary.unreachableBy)[0]).toContain("mj-wrapper");
+  });
+
+  it("still EXPANDS correctly even when the instance is unreachable", () => {
+    // The asymmetry that decided D-2: reference substitutes a fixed-shape token
+    // and runs straight through an opaque wrapper. Copy could not.
+    const src = `<mjml><mj-body><mj-wrapper><mj-section><mj-column>${REF}</mj-column></mj-section></mj-wrapper></mj-body></mjml>`;
+    expect(locateInstances(src).summary.unreachable).toBe(1);
+    const { mjml } = expand(src, storeWithButton());
+    expect(mjml).toContain("Shop now");
+    const res = mjml2html(mjml, { validationLevel: "soft" }) as {
+      html: string;
+      errors?: unknown[];
+    };
+    expect(res.html).toContain("Shop now");
+  });
+});

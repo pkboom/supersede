@@ -13,7 +13,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "components": "tsx scripts/component-slice.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
