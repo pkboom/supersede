@@ -17,12 +17,13 @@
  */
 
 
-/** Raised when a source carries an unterminated `<!--`. */
+/** Raised when a source carries an unterminated `<!--` that could hide a reference. */
 export class UnterminatedCommentError extends ExpansionError {
   constructor(readonly at: number) {
     super(
-      `Unterminated <!-- comment at offset ${at}. Refusing to scan: mjml swallows ` +
-        `everything after it, so a reference inside would silently vanish from the output.`
+      `Unterminated <!-- comment at offset ${at}. Refusing to scan: mjml treats ` +
+        `everything after it as comment content, so a reference inside would be ` +
+        `silently absent from the output.`
     );
     this.name = "UnterminatedCommentError";
   }
@@ -33,33 +34,47 @@ export interface Range {
   end: number;
 }
 
+export interface CommentScan {
+  ranges: Range[];
+  /** Offset of an unterminated `<!--`, if the source carries one. */
+  unterminatedAt?: number;
+}
+
+/**
+ * Elements whose content is RAW TEXT, not markup. Inside these, `<!--` is
+ * ordinary text and opens no comment — htmlparser2 tokenizes them specially and
+ * so must we, or `<script><!--</script>` starts a comment here that never
+ * started there, swallowing every reference until the next `-->`.
+ */
+const RAW_TEXT_ELEMENTS = ["script", "style", "title", "textarea"];
+
 /**
  * Byte ranges covered by XML comments.
  *
- * **A forward scan, not `lastIndexOf("<!--")`.** The backward search is wrong in
- * two reachable ways, and both produced a silent HTTP 200 with content missing:
+ * **This must agree with htmlparser2**, which is the parser mjml actually uses
+ * (via mjml-parser-xml). Any disagreement is a leak in one direction or a false
+ * rejection in the other, and both have happened here:
  *
- *  1. `<mj-text alt="<!--">x</mj-text><mj-component/>` — the `<!--` lives inside
- *     an ATTRIBUTE VALUE and opens no comment, but a backward search finds it
- *     and concludes the reference is commented out. It is then neither expanded
- *     nor reported.
- *  2. `<!-- note<mj-component/>` — an UNTERMINATED comment. A backward search
- *     finds the opener, sees no closer, and treats everything after it as
- *     commented. mjml does the same and swallows the rest of the document,
- *     without a diagnostic.
+ *  - A backward `lastIndexOf("<!--")` was fooled by a `<!--` inside an attribute
+ *    value, and by an unterminated comment. Fixed by scanning forward and
+ *    skipping whole tags quote-aware.
+ *  - **Short comments.** htmlparser2 closes `<!-->` and `<!--->` immediately
+ *    (Tokenizer.js: "Allow short comments (eg. <!-->)", sequenceIndex = 2).
+ *    Searching for `-->` from `lt + 4` misses that and runs the comment on to
+ *    the NEXT `-->` anywhere later in the document — which any ordinary trailing
+ *    comment supplies — swallowing every reference in between. Searching from
+ *    `lt + 2` lets the opener's own `--` serve as the closer's, which is exactly
+ *    what htmlparser2 does.
+ *  - **Raw-text elements.** See RAW_TEXT_ELEMENTS.
  *
- * Scanning forward and skipping whole tags quote-aware fixes (1); throwing on an
- * unterminated comment fixes (2) — that input is malformed source, and guessing
- * at intent is how the content went missing in the first place.
- *
- * Both the substitution scanner and the survivor guard use this. Sharing is safe
- * HERE, where it was not safe for tag scanning: this function is total — it
- * either returns unambiguous ranges or throws — so there is no failure mode for
- * the two to share. The independence that matters is over tag WELL-FORMEDNESS,
- * where the guard remains deliberately more permissive.
+ * An unterminated comment is REPORTED rather than thrown, so the caller can
+ * decide. It only matters when a reference could be hidden by it; a template
+ * with a stray `<!--` and no components renders fine in mjml and must not be
+ * rejected here.
  */
-export function commentRanges(src: string): Range[] {
-  const out: Range[] = [];
+export function scanComments(src: string): CommentScan {
+  const ranges: Range[] = [];
+  let unterminatedAt: number | undefined;
   let i = 0;
 
   while (i < src.length) {
@@ -67,15 +82,20 @@ export function commentRanges(src: string): Range[] {
     if (lt === -1) break;
 
     if (src.startsWith("<!--", lt)) {
-      const close = src.indexOf("-->", lt + 4);
-      if (close === -1) throw new UnterminatedCommentError(lt);
-      out.push({ start: lt, end: close + 3 });
+      // From lt + 2, so the opener's own `--` can close a short comment.
+      const close = src.indexOf("-->", lt + 2);
+      if (close === -1) {
+        unterminatedAt = lt;
+        ranges.push({ start: lt, end: src.length });
+        break;
+      }
+      ranges.push({ start: lt, end: close + 3 });
       i = close + 3;
       continue;
     }
 
-    // Any other `<` begins a tag (or stray text). Skip past it quote-aware so a
-    // `<!--` sitting inside an attribute value cannot be mistaken for a comment.
+    // Skip past this tag quote-aware, so a `<!--` inside an attribute value
+    // cannot be mistaken for a comment opener.
     let j = lt + 1;
     let inSingle = false;
     let inDouble = false;
@@ -90,10 +110,27 @@ export function commentRanges(src: string): Range[] {
       else if (ch === ">") break;
       j++;
     }
+
+    // If this opened a raw-text element, its CONTENT is text: skip to the close
+    // tag so a `<!--` inside it is never read as a comment opener.
+    const nameMatch = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(lt, j + 1));
+    const name = nameMatch?.[1]?.toLowerCase();
+    const selfClosed = src[j - 1] === "/";
+    if (name && !selfClosed && RAW_TEXT_ELEMENTS.includes(name)) {
+      const closeTag = src.toLowerCase().indexOf(`</${name}`, j);
+      i = closeTag === -1 ? src.length : closeTag;
+      continue;
+    }
+
     i = j + 1;
   }
 
-  return out;
+  return { ranges, unterminatedAt };
+}
+
+/** Ranges only. Retained for call sites that do not care about termination. */
+export function commentRanges(src: string): Range[] {
+  return scanComments(src).ranges;
 }
 
 export function isInRanges(ranges: Range[], offset: number): boolean {

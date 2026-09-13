@@ -18,6 +18,7 @@ import { Hono } from "hono";
 import mjml2html from "mjml";
 import { stampMjmlPaths } from "../../shared/blocks/stampPaths.js";
 import {
+  COMPONENT_TAG,
   InMemoryComponentStore,
   expand,
   ExpansionError,
@@ -198,6 +199,31 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
         // filesystem layout is not.
         return raw.replace(/^Line (\d+) of \S+ /, "Line $1 ");
       });
+
+      // ---- The authoritative survivor check ----
+      //
+      // Our own guard proves a reference did not survive OUR scan. This proves
+      // it did not survive the COMPILER, which is the only opinion that decides
+      // what reaches the recipient. If mjml says `mj-component` is unregistered,
+      // a reference reached it — regardless of which parser quirk our scanner
+      // got wrong this time.
+      //
+      // That distinction is not hypothetical: every leak found in review so far
+      // was our comment model disagreeing with htmlparser2 (a `<!--` inside an
+      // attribute value; an unterminated comment; the short forms `<!-->` and
+      // `<!--->`; `<!--` inside a <script>). In at least one of them mjml DID
+      // report the error and this route returned 200 anyway. Escalating here
+      // closes the class rather than the instance, so the next quirk fails
+      // loudly instead of shipping a footerless email.
+      const survived = mjmlErrors.filter((e) => e.includes(COMPONENT_TAG));
+      if (survived.length > 0) {
+        c.status(422);
+        return c.json({
+          error:
+            `A <${COMPONENT_TAG}/> reference reached the compiler unexpanded, which would ` +
+            `render as HTTP 200 with the content silently missing: ${survived.join("; ")}`,
+        });
+      }
 
       setCached(expanded, stamped.html, stamped.missing, mjmlErrors);
       return c.json({

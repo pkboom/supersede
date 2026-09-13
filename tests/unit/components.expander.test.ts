@@ -599,3 +599,68 @@ describe("locateInstances — detect-and-report is mandatory", () => {
     expect(res.html).toContain("Shop now");
   });
 });
+
+describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
+  // Any disagreement is a leak in one direction or a false rejection in the
+  // other, and both have happened here.
+  const store = () => {
+    const s = new InMemoryComponentStore();
+    s.publish("shoe/footer", `<mj-text>FOOTERMARK</mj-text>`);
+    return s;
+  };
+  const REFF = `<mj-component component-id="shoe/footer" revision="1" />`;
+
+  it("treats <!--> as a COMPLETE comment, not one running to the next -->", () => {
+    // htmlparser2 closes short comments immediately (Tokenizer.js: "Allow short
+    // comments (eg. <!-->)"). Searching for `-->` from lt+4 misses that and runs
+    // the comment on to any later `-->`, swallowing every reference between —
+    // which surfaced as HTTP 200 with the content silently gone.
+    const src = `<mjml><mj-body><mj-section><mj-column><!--><mj-text>Hello</mj-text>${REFF}</mj-column></mj-section><!-- footer --></mj-body></mjml>`;
+    expect(expand(src, store()).mjml).toContain("FOOTERMARK");
+  });
+
+  it("treats <!---> as a COMPLETE comment", () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><!---><mj-text>Hello</mj-text>${REFF}</mj-column></mj-section><!-- footer --></mj-body></mjml>`;
+    expect(expand(src, store()).mjml).toContain("FOOTERMARK");
+  });
+
+  it("does not treat <!-- inside a raw-text element as a comment opener", () => {
+    // Inside <script>/<style>/<title>/<textarea> the content is TEXT, so `<!--`
+    // opens no comment. Reading it as one swallowed everything to the next -->.
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-raw><script><!--</script></mj-raw>${REFF}</mj-column></mj-section><!-- t --></mj-body></mjml>`;
+    expect(expand(src, store()).mjml).toContain("FOOTERMARK");
+  });
+
+  it("still ignores a genuinely commented-out reference", () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><!-- ${REFF} --><mj-text>vis</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    const { mjml } = expand(src, store());
+    expect(mjml).not.toContain("FOOTERMARK");
+  });
+
+  it("does NOT reject a stray <!-- in a template with no references", () => {
+    // The mirror defect of the leak: throwing unconditionally rejected
+    // templates mjml renders without complaint. The throw is only warranted
+    // when an unterminated comment could HIDE a reference.
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section></mj-body><!-- note</mjml>`;
+    expect(() => expand(src, store())).not.toThrow();
+  });
+
+  it("DOES reject a stray <!-- when the template carries a reference", () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-text>H</mj-text><!-- note${REFF}</mj-column></mj-section></mj-body></mjml>`;
+    expect(() => expand(src, store())).toThrow(UnterminatedCommentError);
+  });
+
+  it("expands a 200-reference document quickly enough for the render path", () => {
+    // Regression: findTag was called without the precomputed comment ranges, so
+    // every reference rescanned the whole document. That took ~8s here, inside
+    // /api/render, which the preview pane hits on a 200ms keystroke debounce.
+    const s = new InMemoryComponentStore();
+    s.publish("b/btn", `<mj-button href="#">Go</mj-button>`);
+    const pad = Array.from({ length: 300 }, (_, i) => `<mj-text>Filler ${i} with a realistic amount of body copy.</mj-text>`).join("");
+    const refs = Array.from({ length: 200 }, () => `<mj-component component-id="b/btn" revision="1" />`).join("");
+    const src = `<mjml><mj-body><mj-section><mj-column>${pad}${refs}</mj-column></mj-section></mj-body></mjml>`;
+    const t0 = performance.now();
+    expand(src, s);
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+});

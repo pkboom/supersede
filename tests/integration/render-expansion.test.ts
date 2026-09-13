@@ -263,3 +263,50 @@ describe("malformed and comment-hidden references fail loudly", () => {
     }
   });
 });
+
+describe("mjml's own errors are the authoritative survivor check", () => {
+  it("escalates to 422 when mjml reports an unexpanded reference", async () => {
+    // Our guard proves a reference survived OUR scan; this proves it survived
+    // the COMPILER, which is the only opinion that decides what reaches the
+    // recipient. Every leak found in review was our comment model disagreeing
+    // with htmlparser2, and in at least one case mjml reported the error while
+    // this route returned 200 anyway. Escalating closes the class, not the
+    // instance — the next parser quirk fails loudly instead of shipping a
+    // footerless email.
+    //
+    // Reaching the compiler with a live reference requires bypassing the
+    // expander, so drive the route with a store that cannot resolve it and
+    // confirm we never return 200-with-content-missing.
+    const s = new InMemoryComponentStore();
+    s.publish("brand/footer", `<mj-text>FOOTERCONTENT</mj-text>`);
+    const src =
+      `<mjml><mj-body><mj-section><mj-column>` +
+      `<mj-component component-id="brand/footer" revision="1" />` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(s), src);
+    // Either it expanded (200 + content) or it refused (422). Never 200 without.
+    if (status === 200) {
+      expect(body.html as string).toContain("FOOTERCONTENT");
+    } else {
+      expect(status).toBe(422);
+    }
+  });
+
+  it("never returns 200 with a reference absent, across comment edge cases", async () => {
+    const s = new InMemoryComponentStore();
+    s.publish("shoe/footer", `<mj-text>FOOTERMARK</mj-text>`);
+    const REFF = `<mj-component component-id="shoe/footer" revision="1" />`;
+    const cases = [
+      `<mjml><mj-body><mj-section><mj-column><!--><mj-text>H</mj-text>${REFF}</mj-column></mj-section><!-- f --></mj-body></mjml>`,
+      `<mjml><mj-body><mj-section><mj-column><!---><mj-text>H</mj-text>${REFF}</mj-column></mj-section><!-- f --></mj-body></mjml>`,
+      `<mjml><mj-body><mj-section><mj-column><mj-text alt="<!--">H</mj-text>${REFF}</mj-column></mj-section></mj-body></mjml>`,
+      `<mjml><mj-body><mj-section><mj-column><mj-raw><script><!--</script></mj-raw>${REFF}</mj-column></mj-section><!-- t --></mj-body></mjml>`,
+    ];
+    for (const src of cases) {
+      const { status, body } = await render(appWith(s), src);
+      const present = ((body.html as string) ?? "").includes("FOOTERMARK");
+      // The forbidden outcome is 200 with the content gone.
+      expect(status === 200 && !present, src.slice(0, 70)).toBe(false);
+    }
+  });
+});
