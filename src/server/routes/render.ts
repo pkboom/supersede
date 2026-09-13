@@ -1,7 +1,7 @@
 /**
  * /api/render — server-side MJML compile.
  *
- * Body: { source: string } → { html: string, unstamped: string[] }.
+ * Body: { source: string } → { html, unstamped[], mjmlErrors[] }.
  * Cached in-memory with a small LRU (cap 32). Caller is expected to debounce
  * client-side (PreviewPane debounces 200ms).
  *
@@ -34,6 +34,8 @@ interface CacheEntry {
    * property of this render, not of this request.
    */
   unstamped: string[];
+  /** Diagnostics mjml reported under soft validation. See the read site. */
+  mjmlErrors: string[];
   ts: number;
 }
 
@@ -49,8 +51,13 @@ function getCached(expanded: string): CacheEntry | null {
   return e;
 }
 
-function setCached(expanded: string, html: string, unstamped: string[]): void {
-  cache.unshift({ expanded, html, unstamped, ts: Date.now() });
+function setCached(
+  expanded: string,
+  html: string,
+  unstamped: string[],
+  mjmlErrors: string[]
+): void {
+  cache.unshift({ expanded, html, unstamped, mjmlErrors, ts: Date.now() });
   while (cache.length > CACHE_CAP) cache.pop();
 }
 
@@ -103,9 +110,38 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
       throw err;
     }
 
+    // ---- Refuse mj-include: it reads server-local files ----
+    //
+    // mjml resolves `<mj-include path="..."/>` against the server filesystem,
+    // and its directory-traversal fix (CVE-2020-12827) is incomplete through
+    // 4.18.0 — the version this project is pinned to, with no non-breaking
+    // upgrade available. Verified reachable from this route: relative
+    // traversal, absolute paths, and `type="css"` all return file contents in
+    // the HTTP 200 body, which is then rendered in the canvas and persisted
+    // into the template on the next save.
+    //
+    // The realistic chain is not a remote attacker — the guard above blocks
+    // those — it is the user pasting a third-party brief into the AI pane,
+    // Claude emitting an <mj-include/>, and the file coming back. This app has
+    // no legitimate use for includes: the only mentions in src/ are comments
+    // describing the tag as unmodeled passthrough. So refusing costs nothing.
+    if (/<\s*mj-include(?![\w-])/i.test(expanded)) {
+      c.status(422);
+      return c.json({
+        error:
+          "<mj-include/> is not supported: it reads files from the server filesystem.",
+      });
+    }
+
     const cached = getCached(expanded);
     if (cached !== null) {
-      return c.json({ html: cached.html, unstamped: cached.unstamped });
+      // Every field must be returned on the cache-hit path too, or the first
+      // request after a restart behaves differently from every later one.
+      return c.json({
+        html: cached.html,
+        unstamped: cached.unstamped,
+        mjmlErrors: cached.mjmlErrors,
+      });
     }
 
     try {
@@ -115,7 +151,6 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
       };
       // Stamp `data-mjml-path` attrs on rendered elements so the iframe
       // bootstrap can echo them back as overlay anchors. Plan §2.2.3:
-      // cache key remains source-only; cached value is the stamped HTML.
       // Warn-once-per-cache-miss when matchers fail to cover every parser
       // block (mjml drift); the iframe silently skips unstamped blocks.
       const stamped = stampMjmlPaths(expanded, result.html);
@@ -137,8 +172,33 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
       // was compiled. It is still worth returning, for the registry-gap class
       // and as the smoke alarm for the deferred mjml 4->5 bump (§0.4), whose
       // most likely casualty is exactly this code path.
-      setCached(expanded, stamped.html, stamped.missing);
-      return c.json({ html: stamped.html, unstamped: stamped.missing });
+      // Read `result.errors` instead of discarding it.
+      //
+      // This is the expander guard's only INDEPENDENT feed. The guard proves a
+      // reference did not survive OUR scan; mjml's own errors prove it did not
+      // survive the COMPILER. A second check that fails whenever the first does
+      // is decoration — this one fails differently, which is the point. It is
+      // also where the silent HTTP-200 content loss announces itself today:
+      // mjml reports "Element mj-component doesn't exist" in here, under soft
+      // validation, and this route used to reach the field by type assertion
+      // and never look at it.
+      const mjmlErrors = (result.errors ?? []).map((e) =>
+        typeof e === "string"
+          ? e
+          : String(
+              (e as { formattedMessage?: string; message?: string })
+                ?.formattedMessage ??
+                (e as { message?: string })?.message ??
+                e
+            )
+      );
+
+      setCached(expanded, stamped.html, stamped.missing, mjmlErrors);
+      return c.json({
+        html: stamped.html,
+        unstamped: stamped.missing,
+        mjmlErrors,
+      });
     } catch (err) {
       c.status(500);
       return c.json({ error: `MJML compile failed: ${(err as Error).message}` });

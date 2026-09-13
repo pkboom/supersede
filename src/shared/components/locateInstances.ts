@@ -95,17 +95,30 @@ function opaqueRanges(source: string, nodes: TreeNode[]): OpaqueRange[] {
         }
         const raw = n.rawXml;
         const at = source.indexOf(raw, cursor);
-        if (at !== -1) {
+        if (at === -1) {
+          // Offset recovery failed. In a module whose contract is "never
+          // silently skip an unreachable instance", the one step that CAN fail
+          // must not fail by producing the forbidden answer. Treat the rest of
+          // the document as unclassifiable rather than reporting everything in
+          // it as reachable.
           ranges.push({
-            start: at,
-            end: at + raw.length,
+            start: cursor,
+            end: source.length,
             reason:
-              n.type === "mj-custom-passthrough"
-                ? `<${n.originalTagName}> is not modeled by the parser`
-                : "unmodeled content (comment or stray text)",
+              "offset recovery failed — this region could not be classified, " +
+              "so its instances are reported unreachable rather than assumed reachable",
           });
-          cursor = at + raw.length;
+          return;
         }
+        ranges.push({
+          start: at,
+          end: at + raw.length,
+          reason:
+            n.type === "mj-custom-passthrough"
+              ? `<${n.originalTagName}> is not modeled by the parser`
+              : "unmodeled content (comment or stray text)",
+        });
+        cursor = at + raw.length;
         continue;
       }
       if (n.children) walk(n.children);

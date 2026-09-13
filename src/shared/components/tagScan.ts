@@ -22,6 +22,17 @@ export interface ScannedAttr {
   value: string;
 }
 
+/** Raised when a tag is present but cannot be scanned (e.g. unterminated quote). */
+export class MalformedTagError extends Error {
+  constructor(
+    readonly tagName: string,
+    readonly at: number
+  ) {
+    super(`Malformed <${tagName}> at offset ${at}: tag is not terminated`);
+    this.name = "MalformedTagError";
+  }
+}
+
 export interface ScannedTag {
   name: string;
   /** Inclusive start offset of `<`. */
@@ -56,8 +67,10 @@ function parseAttrs(src: string): ScannedAttr[] {
     while (i < src.length && /\s/.test(src[i]!)) i++;
 
     if (src[i] !== "=") {
-      // Valueless attribute (e.g. `disabled`). Record it with an empty value so
-      // it round-trips rather than vanishing.
+      // Valueless attribute (e.g. `disabled`). Recorded with an empty value so
+      // it is not silently dropped. NOTE: this does NOT round-trip —
+      // `renderOpenTag` re-emits it as `disabled=""`. MJML has no valueless
+      // attributes, so nothing in this codebase depends on the distinction.
       out.push({ name, value: "" });
       continue;
     }
@@ -99,6 +112,20 @@ export function findTag(
     const idx = src.indexOf(`<${tagName}`, searchFrom);
     if (idx === -1) return null;
 
+    // Skip tags inside XML comments. `readRootTag` already did this; `findTag`
+    // did not, so a commented-out reference was expanded INTO the comment —
+    // a commented-out line changing the output, and corrupting the document
+    // outright if the substituted body contained `--`.
+    const commentStart = src.lastIndexOf("<!--", idx);
+    if (commentStart !== -1) {
+      const commentEnd = src.indexOf("-->", commentStart);
+      if (commentEnd === -1 || commentEnd > idx) {
+        // Inside an open comment: resume scanning after it closes.
+        searchFrom = commentEnd === -1 ? src.length : commentEnd + 3;
+        continue;
+      }
+    }
+
     // Guard against matching a longer tag name that merely starts with ours
     // (`<mj-component-group` must not match `<mj-component`). Mirrors the
     // `(?![\w-])` lookahead parser.ts relies on for the same reason.
@@ -138,7 +165,12 @@ export function findTag(
       i++;
     }
 
-    if (end === -1) return null; // unterminated tag
+    // A tag that is PRESENT but unscannable is not the same as no tag.
+    // Collapsing both to `null` is what let a malformed reference slip past
+    // both the substitution loop and the survivor guard — the guard used this
+    // same scanner, so anything it could not see was invisible to both, making
+    // the guard a tautology on the expander's own fixpoint.
+    if (end === -1) throw new MalformedTagError(tagName, idx);
 
     return {
       name: tagName,
@@ -170,8 +202,9 @@ export function findAllTags(src: string, tagName: string): ScannedTag[] {
 export function readRootTag(src: string): ScannedTag | null {
   const idx = src.indexOf("<");
   if (idx === -1) return null;
-  // Skip comments and processing instructions; a body may be commented above
-  // its root element.
+  // Skip comments; a body may be commented above its root element.
+  // Processing instructions and doctypes are NOT handled — a component body is
+  // a fragment, never a document, so neither can legitimately appear.
   let cursor = idx;
   while (cursor < src.length) {
     if (src.startsWith("<!--", cursor)) {
@@ -188,13 +221,72 @@ export function readRootTag(src: string): ScannedTag | null {
   return findTag(src, m[1]!, cursor);
 }
 
-/** Re-emit an open tag from its parts, preserving attribute order. */
+/**
+ * Re-emit an open tag from its parts, preserving attribute order.
+ *
+ * Values MUST be escaped for `"`, because `parseAttrs` accepts single-quoted
+ * source (`alt='say "hi"'`) while this always emits double quotes. Without the
+ * escape, a value holding a literal `"` terminates the attribute and everything
+ * after it is re-read as further attributes — a working injection primitive,
+ * since an `ov-*` override lands on the component root:
+ *
+ *     ov-color='#000" href="https://evil.test/steal'
+ *       -> <mj-button color="#000" href="https://evil.test/steal">
+ *
+ * The escape is safe for the round-trip contract: a value parsed from
+ * double-quoted source can never contain a bare `"`, so this is a no-op there
+ * and only fires on the single-quoted and programmatic paths.
+ */
 export function renderOpenTag(
   name: string,
   attrs: ScannedAttr[],
   selfClosing: boolean
 ): string {
-  const parts = attrs.map((a) => `${a.name}="${a.value}"`);
+  const parts = attrs.map(
+    (a) => `${a.name}="${a.value.replace(/"/g, "&quot;")}"`
+  );
   const body = parts.length ? " " + parts.join(" ") : "";
   return `<${name}${body}${selfClosing ? " />" : ">"}`;
+}
+
+/**
+ * Offset one past the matching close tag of the element opened at `open`.
+ *
+ * Returns `null` when the element is never closed — deliberately, so callers
+ * can distinguish "unclosed" from "closes at end of input". The regex-based
+ * predecessor returned the input length in that case, which made
+ * `assertSingleRoot` pass VACUOUSLY for an unclosed root: the root appeared to
+ * swallow the rest of the body, so no trailing content was ever seen.
+ *
+ * Uses `findTag`, so it inherits quote-awareness and comment-skipping. The
+ * regex version had neither, and counted same-name tags inside comments and
+ * inside attribute values, plus incremented depth for self-closing tags it
+ * never decremented.
+ */
+export function findElementEnd(src: string, open: ScannedTag): number | null {
+  if (open.selfClosing) return open.end;
+
+  let depth = 1;
+  let cursor = open.end;
+
+  for (;;) {
+    const nextOpen = findTag(src, open.name, cursor);
+    const closeRe = new RegExp(`<\\s*\\/\\s*${open.name}\\s*>`, "g");
+    closeRe.lastIndex = cursor;
+    const nextClose = closeRe.exec(src);
+
+    if (!nextClose) return null; // never closed
+
+    if (nextOpen && nextOpen.start < nextClose.index) {
+      // A self-closing same-name tag opens and closes at once — it must not
+      // increment depth, which the regex predecessor got wrong.
+      if (!nextOpen.selfClosing) depth++;
+      cursor = nextOpen.end;
+      continue;
+    }
+
+    depth--;
+    cursor = nextClose.index + nextClose[0].length;
+    if (depth === 0) return cursor;
+  }
 }

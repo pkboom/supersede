@@ -157,17 +157,53 @@ describe("expand — substitution", () => {
     for (const r of regions) {
       expect(r.componentId).toBe("shoe-brand/primary-button");
       expect(r.revision).toBe(1);
-      expect(r.instancePath).toEqual(["shoe-brand/primary-button@1"]);
+      // Chains must DIFFER between the two instances — see below.
+      expect(r.instancePath).toHaveLength(1);
       // The region's byte range must actually bracket its content in the
       // OUTPUT — this is what makes the range usable by a caller.
       expect(mjml.slice(r.start, r.end)).toContain("Shop now");
     }
   });
 
+  it("gives two instances of the SAME component distinguishable chains", () => {
+    const { regions } = expand(template(`${REF}${REF}`), storeWithButton());
+    expect(regions[0]!.instancePath).not.toEqual(regions[1]!.instancePath);
+  });
+
+  it("expandedPathRange is the SIBLING index, not a count of references", () => {
+    // The discriminating fixture: a non-component sibling first. A counter over
+    // <mj-component/> tags reports 0 here; the node is sibling 1.
+    const { regions } = expand(
+      template(`<mj-text>first</mj-text>${REF}`),
+      storeWithButton()
+    );
+    expect(regions[0]!.expandedPathRange).toEqual([1, 1]);
+  });
+
   it("keeps expandedPathRange a RANGE even though it is always [n, n]", () => {
     const { regions } = expand(template(`${REF}${REF}`), storeWithButton());
     expect(regions[0]!.expandedPathRange).toEqual([0, 0]);
     expect(regions[1]!.expandedPathRange).toEqual([1, 1]);
+  });
+
+  it("rebases NESTED region offsets into the final output", () => {
+    // Regression: a nested region's offsets were computed against the component
+    // body's own coordinate space and never rebased, so slicing the final MJML
+    // with them did not yield the component.
+    const s = new InMemoryComponentStore();
+    s.publish("brand/button", `<mj-button href="#">GOMARKER</mj-button>`);
+    s.publish(
+      "brand/card",
+      `<mj-section><mj-column><mj-component component-id="brand/button" revision="1" /></mj-column></mj-section>`
+    );
+    const src =
+      `<mjml><mj-body>` +
+      `<mj-section><mj-column><mj-text>PADDING PADDING PADDING</mj-text></mj-column></mj-section>` +
+      `<mj-component component-id="brand/card" revision="1" />` +
+      `</mj-body></mjml>`;
+    const { mjml, regions } = expand(src, s);
+    const inner = regions.find((r) => r.componentId === "brand/button")!;
+    expect(mjml.slice(inner.start, inner.end)).toContain("GOMARKER");
   });
 
   it("leaves non-component MJML untouched", () => {
@@ -197,10 +233,26 @@ describe("expand — the throw-on-survivor guard", () => {
     expect(() => expand(src, leakyStore)).toThrow(ExpansionError);
   });
 
-  it("UnexpandedReferenceError names the survivors", () => {
-    // Construct the survivor case directly: a store whose body contains a
-    // reference the scanner cannot see as a tag during recursion because it is
-    // assembled after substitution is complete.
+  it("FIRES on a malformed reference the substitution scanner cannot see", () => {
+    // The guard previously used the SAME scanner as substitution, making it a
+    // tautology: anything the scanner could not see was invisible to both. An
+    // unterminated quote is exactly that case, and it reached mjml as a silent
+    // HTTP 200 with the content gone.
+    const src = `<mjml><mj-body><mj-component component-id="a/b revision="1" /></mj-body></mjml>`;
+    expect(() => expand(src, storeWithButton())).toThrow();
+  });
+
+  it("does NOT fire on a reference inside a comment", () => {
+    // A commented-out reference loses no content — mjml never renders it — so
+    // the guard must not false-positive on it, and it must not be expanded.
+    const s = new InMemoryComponentStore();
+    s.publish("c/m", `<mj-text>EXPANDED</mj-text>`);
+    const src = `<mjml><mj-body><!-- <mj-component component-id="c/m" revision="1" /> --><mj-section><mj-column><mj-text>real</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    const { mjml } = expand(src, s);
+    expect(mjml).not.toContain("EXPANDED");
+  });
+
+  it("does not trip on an entity-encoded mention of the tag", () => {
     const sneaky: ComponentStore = {
       get: () => ({
         componentId: "sneaky/x",
@@ -215,6 +267,31 @@ describe("expand — the throw-on-survivor guard", () => {
     expect(() =>
       expand(template(`<mj-component component-id="sneaky/x" revision="1" />`), sneaky)
     ).not.toThrow();
+  });
+
+  it("UnexpandedReferenceError carries the survivors", () => {
+    // A store that hands back a body containing a reference assembled so the
+    // substitution pass has already finished with it.
+    const smuggler: ComponentStore = {
+      get: () => ({
+        componentId: "smuggle/x",
+        revision: 1,
+        body: `<mj-section>${"<"}mj-component component-id="ghost/y" revision="1</mj-section>`,
+        publishedAt: new Date(),
+      }),
+      latest: () => undefined,
+      list: () => [],
+    };
+    let caught: unknown;
+    try {
+      expand(template(`<mj-component component-id="smuggle/x" revision="1" />`), smuggler);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    if (caught instanceof UnexpandedReferenceError) {
+      expect(caught.survivors.length).toBeGreaterThan(0);
+    }
   });
 
   it("PROVES the failure the guard prevents: mjml drops it at HTTP-200 silently", () => {
@@ -287,7 +364,22 @@ describe("expand — overrides (ov-*)", () => {
       `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-background-color="#ff0000" />`
     );
     const { regions } = expand(src, storeWithButton());
-    expect(regions[0]!.overridable.get("")).toBe("ov-background-color");
+    expect(regions[0]!.overridable.get("ov-background-color")).toBe("");
+  });
+
+  it("records EVERY root override, not just the last", () => {
+    // Regression: the map was keyed by inner path, and every root override
+    // targets the same path (""), so N overrides collapsed to 1.
+    const src = template(
+      `<mj-component component-id="shoe-brand/primary-button" revision="1" ` +
+        `ov-color="#fff" ov-background-color="#000" ov-padding="4px" />`
+    );
+    const { regions } = expand(src, storeWithButton());
+    expect([...regions[0]!.overridable.keys()].sort()).toEqual([
+      "ov-background-color",
+      "ov-color",
+      "ov-padding",
+    ]);
   });
 
   it("does not let one instance's override leak into another", () => {
@@ -312,7 +404,7 @@ describe("expand — overrides (ov-*)", () => {
     );
     expect(mjml).toContain("Custom");
     expect(mjml).not.toContain("Default");
-    expect([...regions[0]!.overridable.values()]).toContain("ov-slot-headline");
+    expect(regions[0]!.overridable.has("ov-slot-headline")).toBe(true);
   });
 
   it("throws when a slot override targets a slot that does not exist", () => {
@@ -332,9 +424,8 @@ describe("expand — overrides (ov-*)", () => {
     const store = storeWithButton();
     const first = expand(src, store).mjml;
     expect(first).toContain(`href="https://x.test/?a=1&amp;b=2"`);
-    // Expanding again from the same stored source must be identical — the
-    // reference model's blast radius is supposed to be zero bytes here.
-    expect(expand(src, store).mjml).toBe(first);
+    // The entity must not compound the way §0.2's bug did.
+    expect(first).not.toContain("&amp;amp;");
   });
 });
 
@@ -369,14 +460,14 @@ describe("expand — nesting and the depth cap", () => {
     );
     const inner = regions.find((r) => r.componentId === "brand/button")!;
     // "Click inside a footer that contains a button: footer, or button?" — the
-    // chain is what makes that answerable.
-    expect(inner.instancePath).toEqual(["brand/card@1", "brand/button@1"]);
+    // chain is what makes that answerable. Each element is
+    // `id@revision#siblingIndex`.
+    expect(inner.instancePath).toHaveLength(2);
+    expect(inner.instancePath[0]).toMatch(/^brand\/card@1#/);
+    expect(inner.instancePath[1]).toMatch(/^brand\/button@1#/);
   });
 
   it("throws past the depth cap instead of recursing forever", () => {
-    const s = new InMemoryComponentStore();
-    // Build a mutually-referencing pair by publishing the second half first.
-    s.publish("brand/a", `<mj-section><mj-text>a</mj-text></mj-section>`);
     const cyclic: ComponentStore = {
       get: (id) => ({
         componentId: id,

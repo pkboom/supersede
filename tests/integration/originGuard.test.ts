@@ -150,3 +150,23 @@ describe("originGuard — integration", () => {
     }
   });
 });
+
+describe("originGuard — hardening from review", () => {
+  it("rejects 0.0.0.0, which is not a loopback name", () => {
+    // The unspecified address, and the published "0.0.0.0 Day" bypass target
+    // for exactly this class of local-server guard. It was briefly in the
+    // allowlist while the README enumerated only localhost/127.0.0.1/[::1].
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("0.0.0.0:3000")).toBe(false);
+  });
+
+  it("rejects an authority carrying userinfo", () => {
+    // `lastIndexOf(":")` alone yields "localhost" for this and allows it.
+    expect(isLoopbackHost("localhost:80@evil.test")).toBe(false);
+    expect(isLoopbackHost("evil.test@localhost")).toBe(false);
+  });
+
+  it("rejects an authority carrying a path separator", () => {
+    expect(isLoopbackHost("localhost/../evil.test")).toBe(false);
+  });
+});

@@ -26,7 +26,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("POST creates with default mjml; GET list returns summary without mjml field", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "Welcome" }),
@@ -37,7 +37,7 @@ describe("/api/templates routes (integration, single-user)", () => {
     expect(created.mjml).toBe("<mjml><mj-body></mj-body></mjml>");
     expect(created.version).toBe(1);
 
-    const list = await app.fetch(new Request("http://test/api/templates"));
+    const list = await app.fetch(new Request("http://localhost/api/templates"));
     expect(list.status).toBe(200);
     const rows = (await list.json()) as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(1);
@@ -48,7 +48,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("GET /:id returns 404 for unknown id", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/templates/00000000-0000-0000-0000-000000000000"),
+      new Request("http://localhost/api/templates/00000000-0000-0000-0000-000000000000"),
     );
     expect(res.status).toBe(404);
   });
@@ -56,7 +56,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("PATCH bumps version on success", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "X" }),
@@ -64,7 +64,7 @@ describe("/api/templates routes (integration, single-user)", () => {
     );
     const tpl = (await create.json()) as { id: string };
     const patch = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, {
+      new Request(`http://localhost/api/templates/${tpl.id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ version: 1, name: "X-renamed" }),
@@ -79,7 +79,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("PATCH returns 409 on stale version", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "X" }),
@@ -87,14 +87,14 @@ describe("/api/templates routes (integration, single-user)", () => {
     );
     const tpl = (await create.json()) as { id: string };
     await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, {
+      new Request(`http://localhost/api/templates/${tpl.id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ version: 1, name: "first" }),
       }),
     );
     const stale = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, {
+      new Request(`http://localhost/api/templates/${tpl.id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ version: 1, name: "second" }),
@@ -106,7 +106,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("PATCH rejects bad mjml type with 400", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "X" }),
@@ -114,7 +114,7 @@ describe("/api/templates routes (integration, single-user)", () => {
     );
     const tpl = (await create.json()) as { id: string };
     const bad = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, {
+      new Request(`http://localhost/api/templates/${tpl.id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ version: 1, mjml: 123 }),
@@ -126,7 +126,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("DELETE returns 204 then 404 on second call", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "X" }),
@@ -134,11 +134,11 @@ describe("/api/templates routes (integration, single-user)", () => {
     );
     const tpl = (await create.json()) as { id: string };
     const d1 = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, { method: "DELETE" }),
+      new Request(`http://localhost/api/templates/${tpl.id}`, { method: "DELETE" }),
     );
     expect(d1.status).toBe(204);
     const d2 = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, { method: "DELETE" }),
+      new Request(`http://localhost/api/templates/${tpl.id}`, { method: "DELETE" }),
     );
     expect(d2.status).toBe(404);
   });
@@ -146,7 +146,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("POST rejects empty name with 400", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "  " }),
@@ -158,7 +158,7 @@ describe("/api/templates routes (integration, single-user)", () => {
   it("PATCH rejects missing version with 400", async () => {
     const app = build();
     const create = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "X" }),
@@ -166,7 +166,7 @@ describe("/api/templates routes (integration, single-user)", () => {
     );
     const tpl = (await create.json()) as { id: string };
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}`, {
+      new Request(`http://localhost/api/templates/${tpl.id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ name: "Y" }),

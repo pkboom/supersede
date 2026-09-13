@@ -17,6 +17,16 @@
 /** Depth cap for components referencing other components. */
 export const MAX_EXPANSION_DEPTH = 5;
 
+/**
+ * Output cap for one expansion.
+ *
+ * The depth cap bounds recursion but NOT fan-out: a chain where each component
+ * references the next N times expands to N^5 within the depth limit. 8 MiB is
+ * far above any real email (the largest sane MJML template is low tens of KB)
+ * and far below anything that threatens the process.
+ */
+export const MAX_EXPANDED_BYTES = 8 * 1024 * 1024;
+
 /** The reference tag name. Fixed shape, always self-closing. */
 export const COMPONENT_TAG = "mj-component";
 
@@ -105,9 +115,26 @@ export interface ExpansionRegion {
    * path can sit inside several regions at once. Click inside a footer that
    * contains a button component: the chain says footer THEN button, outermost
    * first, so "which component did I click" has a defined answer.
+   *
+   * Each element is `componentId@revision#siblingIndex`. The sibling index is
+   * load-bearing, not decoration: without it two INSTANCES of the same
+   * component in one template produce identical chains, and the question this
+   * field exists to answer becomes unanswerable.
    */
   instancePath: string[];
-  /** Inner path (relative to the region root) -> the `ov-*` key it binds to. */
+  /**
+   * `ov-*` key -> the inner path (relative to the region root) it binds to.
+   *
+   * **Keyed by the ov-key, not by the path** — a deliberate inversion of the
+   * shape first sketched for this field. Every root attribute override targets
+   * the SAME inner path (the root, `""`), so a path-keyed map silently collapses
+   * N root overrides into one: `ov-color`, `ov-background-color` and
+   * `ov-padding` all write key `""` and only the last survives. The ov-key is
+   * unique by construction, so this direction is lossless.
+   *
+   * Consumers wanting path -> keys should build the reverse index, which is
+   * a multimap — that asymmetry is the point.
+   */
   overridable: Map<string, string>;
   /**
    * Index-path range this region occupies in the expanded tree.

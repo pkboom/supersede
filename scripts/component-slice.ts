@@ -44,13 +44,20 @@ function heading(s: string): void {
 }
 
 /**
- * Minimal line diff with context.
+ * Minimal positional line diff with context.
  *
- * Deliberately simple: under the reference model a propagation diff is one
- * attribute value per template, so an LCS implementation would be machinery
- * with nothing to do. If a diff here is ever large, that is a signal the
- * one-attribute blast-radius invariant (D-2) has been broken — not a signal
- * that this function needs to be smarter.
+ * Compares line i to line i, so any change in LINE COUNT between revisions
+ * shifts everything after it and reports the remainder as changed. That is
+ * acceptable here because the bodies compared are small and usually the same
+ * shape — but it means a large diff signals a line-count change, NOT a broken
+ * invariant.
+ *
+ * Specifically: D-2's one-attribute blast radius is about bytes rewritten in
+ * STORED templates. This function shows EXPANDED MJML, where a revision bump is
+ * expected to change the component body wholesale. The two quantities are
+ * unrelated, and conflating them would send someone debugging a noisy diff
+ * after the wrong invariant. The stored-side measurement is printed separately
+ * below, and it is measured rather than asserted.
  */
 function printDiff(before: string, after: string, context = 2): number {
   const a = before.split("\n");
@@ -209,6 +216,7 @@ function cmdDiff(): number {
   const templates = makeTemplates(1);
   let totalChanged = 0;
 
+
   for (const t of templates) {
     const before = expand(t.mjml, store).mjml;
     const after = expand(t.mjml, store, {
@@ -218,13 +226,37 @@ function cmdDiff(): number {
     totalChanged += printDiff(before, after);
   }
 
-  heading("Blast radius");
+  heading("Blast radius (measured, not asserted)");
+  // Actually compute the stored-side delta rather than printing a claim. In a
+  // codebase that asks for explicit invariants, a hardcoded "0 bytes" styled as
+  // a result is the weaker half of the demo.
+  let storedChangedLines = 0;
+  let storedChangedChars = 0;
+  for (const t of templates) {
+    const applied = t.mjml.replace(
+      new RegExp(`(component-id="${COMPONENT_ID}"\\s+revision=")1(")`, "g"),
+      `$1${published.revision}$2`
+    );
+    const a = t.mjml.split("\n");
+    const b = applied.split("\n");
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (a[i] !== b[i]) {
+        storedChangedLines++;
+        const x = a[i] ?? "";
+        const y = b[i] ?? "";
+        for (let k = 0; k < Math.max(x.length, y.length); k++) {
+          if (x[k] !== y[k]) storedChangedChars++;
+        }
+      }
+    }
+  }
   console.log(
-    `  Stored templates rewritten by applying this: ${c.bold("0 bytes")} until the pin moves.`
+    `  Stored templates rewritten before applying: ${c.bold("0 bytes")} — the pin has not moved.`
   );
   console.log(
-    `  Applying moves ${c.bold("one attribute value")} per template — ` +
-      `${c.dim(`revision="1" → revision="${published.revision}"`)}`
+    `  Applying changes ${c.bold(String(storedChangedLines))} line(s) and ` +
+      `${c.bold(String(storedChangedChars))} character(s) across ${templates.length} templates ` +
+      `${c.dim(`(revision="1" → revision="${published.revision}")`)}`
   );
   console.log(
     c.dim(
@@ -277,23 +309,43 @@ function cmdDemo(): void {
     );
   }
 
-  heading("The guard");
+  heading("The guards");
   console.log(
     c.dim(
       "An unexpanded reference compiles to HTTP 200 with the content silently\n" +
-        "gone. The expander refuses to return such MJML."
+        "gone. Two distinct refusals protect against that."
     )
   );
+  // (a) a pin with no such revision — ComponentNotFoundError.
   try {
     expand(makeTemplates(99)[0]!.mjml, store);
-    console.log(c.red("  ✗ expected the guard to fire and it did not"));
+    console.log(c.red("  ✗ expected a refusal for a missing revision and got none"));
   } catch (err) {
     if (err instanceof ExpansionError) {
-      console.log(`  ${c.green("✓")} refused: ${c.dim(err.message.slice(0, 96))}`);
+      console.log(
+        `  ${c.green("✓")} missing revision refused: ${c.dim(err.message.slice(0, 80))}`
+      );
     } else throw err;
   }
+  // (b) the throw-on-survivor guard itself, on a reference the substitution
+  // scanner cannot parse. This is the one the heading is really about, and an
+  // earlier version of this demo only ever exercised (a).
+  try {
+    expand(
+      `<mjml><mj-body><mj-component component-id="${COMPONENT_ID}" revision="1 /></mj-body></mjml>`,
+      store
+    );
+    console.log(c.red("  ✗ expected the survivor guard to fire and it did not"));
+  } catch (err) {
+    console.log(
+      `  ${c.green("✓")} malformed reference refused: ${c.dim((err as Error).message.slice(0, 80))}`
+    );
+  }
 
-  cmdDiff();
+  const changed = cmdDiff();
+  if (changed === 0) {
+    console.log(c.red("\n  ✗ expected the revision bump to change the expanded output"));
+  }
   cmdExport();
   cmdReport();
 

@@ -23,7 +23,7 @@ describe("createWebApp (integration)", () => {
 
   it("GET /api/health returns 200 with version + ts", async () => {
     const app = build();
-    const res = await app.fetch(new Request("http://test/api/health"));
+    const res = await app.fetch(new Request("http://localhost/api/health"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; version: string; ts: string };
     expect(body.ok).toBe(true);
@@ -36,7 +36,7 @@ describe("createWebApp (integration)", () => {
     const source =
       "<mjml><mj-body><mj-section><mj-column><mj-text>hi</mj-text></mj-column></mj-section></mj-body></mjml>";
     const res = await app.fetch(
-      new Request("http://test/api/render", {
+      new Request("http://localhost/api/render", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ source }),
@@ -51,7 +51,7 @@ describe("createWebApp (integration)", () => {
   it("POST /api/render rejects missing source with 400", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/render", {
+      new Request("http://localhost/api/render", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
@@ -62,7 +62,7 @@ describe("createWebApp (integration)", () => {
 
   it("returns 404 for an unknown route", async () => {
     const app = build();
-    const res = await app.fetch(new Request("http://test/api/nonsense"));
+    const res = await app.fetch(new Request("http://localhost/api/nonsense"));
     expect(res.status).toBe(404);
   });
 });

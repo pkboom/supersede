@@ -13,7 +13,7 @@ import {
   type ComponentStore,
   ExpansionError,
 } from "./types.js";
-import { findAllTags, readRootTag } from "./tagScan.js";
+import { findAllTags, findElementEnd, readRootTag } from "./tagScan.js";
 
 /**
  * Validate the single-root invariant.
@@ -38,7 +38,15 @@ export function assertSingleRoot(componentId: string, body: string): void {
 
   // The root must span the whole body. If anything but whitespace follows it,
   // there is a second root.
-  const tail = trimmed.slice(root.selfClosing ? root.end : closingEnd(trimmed, root.name, root.end));
+  const end = findElementEnd(trimmed, root);
+  if (end === null) {
+    throw new ExpansionError(
+      `Component "${componentId}" body has an unclosed <${root.name}> root. ` +
+        `(An earlier implementation treated "never closed" as "closes at the end", ` +
+        `which made this check pass vacuously for exactly the malformed bodies it exists to reject.)`
+    );
+  }
+  const tail = trimmed.slice(end);
   if (tail.trim().length > 0) {
     throw new ExpansionError(
       `Component "${componentId}" body must have exactly ONE root element; ` +
@@ -46,29 +54,6 @@ export function assertSingleRoot(componentId: string, body: string): void {
         `is what keeps stored and expanded index paths 1:1.`
     );
   }
-}
-
-/** Offset just past the matching close tag for an element opened at `openEnd`. */
-function closingEnd(src: string, name: string, openEnd: number): number {
-  let depth = 1;
-  let cursor = openEnd;
-  const openRe = new RegExp(`<\\s*${name}(?![\\w-])`, "g");
-  const closeRe = new RegExp(`<\\s*\\/\\s*${name}\\s*>`, "g");
-  while (cursor < src.length && depth > 0) {
-    openRe.lastIndex = cursor;
-    closeRe.lastIndex = cursor;
-    const o = openRe.exec(src);
-    const c = closeRe.exec(src);
-    if (!c) return src.length;
-    if (o && o.index < c.index) {
-      depth++;
-      cursor = o.index + 1;
-    } else {
-      depth--;
-      cursor = c.index + c[0].length;
-    }
-  }
-  return cursor;
 }
 
 export class InMemoryComponentStore implements ComponentStore {
@@ -98,10 +83,13 @@ export class InMemoryComponentStore implements ComponentStore {
   /**
    * Publish a new immutable revision. Returns it.
    *
-   * Revisions are append-only: re-publishing an existing revision number is an
-   * error rather than an overwrite, because a template pinned to it would
-   * silently change content without its pin moving — which is precisely the
-   * property the reference model exists to prevent.
+   * Revisions are append-only: the number is ALLOCATED here (max + 1) and
+   * cannot be supplied by the caller, so an existing revision can never be
+   * overwritten through this method. That matters because a template pinned to
+   * a revision would otherwise change content without its pin moving — exactly
+   * the property the reference model exists to prevent.
+   *
+   * `fromJSON` is the path that CAN violate this, and it validates separately.
    */
   publish(
     componentId: string,
@@ -146,23 +134,62 @@ export class InMemoryComponentStore implements ComponentStore {
     }));
   }
 
+  /**
+   * Rehydrate from JSON.
+   *
+   * This is the hand-migration entry point, which makes it the one path that
+   * can violate every invariant `publish()` enforces — so it re-checks them
+   * rather than trusting the file. An earlier version coerced blindly
+   * (`String(undefined)` becoming the literal `"undefined"` as a body) and
+   * silently overwrote duplicate revisions.
+   */
   static fromJSON(raw: unknown): InMemoryComponentStore {
     const store = new InMemoryComponentStore();
     if (!Array.isArray(raw)) return store;
-    for (const item of raw as Array<Record<string, unknown>>) {
-      const componentId = String(item.componentId);
+
+    for (const [i, item] of (raw as Array<Record<string, unknown>>).entries()) {
+      if (typeof item?.componentId !== "string" || !item.componentId) {
+        throw new ExpansionError(`Entry ${i} has no componentId`);
+      }
+      const componentId = item.componentId;
+
       const revision = Number(item.revision);
+      if (!Number.isInteger(revision) || revision < 1) {
+        throw new ExpansionError(
+          `Component "${componentId}" entry ${i} has a non-integer revision: ${String(item.revision)}`
+        );
+      }
+      if (typeof item.body !== "string") {
+        throw new ExpansionError(
+          `Component "${componentId}" revision ${revision} has no body string`
+        );
+      }
+      assertSingleRoot(componentId, item.body);
+
+      const publishedAt = new Date(String(item.publishedAt));
+      if (Number.isNaN(publishedAt.getTime())) {
+        throw new ExpansionError(
+          `Component "${componentId}" revision ${revision} has an invalid publishedAt`
+        );
+      }
+
       let revs = store.byId.get(componentId);
       if (!revs) {
         revs = new Map();
         store.byId.set(componentId, revs);
       }
+      if (revs.has(revision)) {
+        throw new ExpansionError(
+          `Component "${componentId}" has duplicate revision ${revision}; ` +
+            `revisions are immutable and a duplicate would silently change pinned content`
+        );
+      }
       revs.set(revision, {
         componentId,
         revision,
-        body: String(item.body),
+        body: item.body,
         label: item.label === undefined ? undefined : String(item.label),
-        publishedAt: new Date(String(item.publishedAt)),
+        publishedAt,
       });
     }
     return store;

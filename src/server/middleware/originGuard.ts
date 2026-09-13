@@ -49,13 +49,16 @@ import type { Context, Next } from "hono";
  * and the dev proxy use it; raw IPv4/IPv6 loopback literals because tooling and
  * `curl` use those.
  */
-const LOOPBACK_HOSTNAMES = new Set([
-  "localhost",
-  "127.0.0.1",
-  "[::1]",
-  "::1",
-  "0.0.0.0",
-]);
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+// A bare `::1` is NOT listed: `hostnameOf` splits on the last colon for any
+// unbracketed value, so `::1` would arrive here as `":"` and could never match.
+// An entry that cannot fire is worse than absent — it reads as coverage.
+// NOT in the list, deliberately: `0.0.0.0`. It is not a loopback NAME — it is
+// the unspecified address, and it is the published "0.0.0.0 Day" bypass target
+// for exactly this class of local-server guard. It was in an earlier draft of
+// this file, which also made the code disagree with the README sentence that
+// enumerates the accepted names — reintroducing, in the same commit that fixed
+// it, the §0.6 sin of a documented control differing from the real one.
 
 /**
  * Strip the port from a `Host` header value, preserving bracketed IPv6 form.
@@ -63,6 +66,12 @@ const LOOPBACK_HOSTNAMES = new Set([
  */
 export function hostnameOf(hostHeader: string): string {
   const trimmed = hostHeader.trim().toLowerCase();
+  // Userinfo and path characters have no place in an authority. Without this,
+  // `localhost:80@evil.test` splits on the LAST colon to `"localhost"` and is
+  // allowed. Node's own parser rejects that shape with 400 before we see it,
+  // but this helper is exported and unit-tested as if it were authoritative,
+  // so it must not depend on someone else's validation.
+  if (trimmed.includes("@") || trimmed.includes("/")) return "\0";
   if (trimmed.startsWith("[")) {
     const close = trimmed.indexOf("]");
     return close === -1 ? trimmed : trimmed.slice(0, close + 1);
@@ -94,12 +103,37 @@ export function isLoopbackOrigin(origin: string): boolean {
 
 export interface OriginGuardOptions {
   /**
-   * Requests with NO `Host` header at all. Real browsers and HTTP/1.1 clients
-   * always send one; direct in-process calls (Hono's `app.request()`) may not.
-   * Defaults to allowing them, because a request that never crossed a network
-   * boundary cannot have been rebound.
+   * Escape hatch for a request carrying NO usable authority at all — neither a
+   * `Host` header nor a resolvable host in the request URL.
+   *
+   * Defaults to **false**: fail closed. An earlier draft defaulted this to
+   * `true` so that in-process `app.request()` calls would pass, which made a
+   * test-harness convenience into the production posture of a security control.
+   * The authority fallback below removes the need for that.
    */
   allowMissingHost?: boolean;
+}
+
+/**
+ * The authority this request was addressed to.
+ *
+ * Prefers the `Host` header, which is what survives a DNS rebind and therefore
+ * what the check is really about. Falls back to the host component of the
+ * request URL, which is NOT a weakening: `@hono/node-server` builds `c.req.url`
+ * from the very same `Host` header, so on a real network request the two agree
+ * by construction. The fallback exists because Hono's in-process
+ * `app.request()` populates the URL but sends no header — and tests that have
+ * to disable a security control to pass are tests that stop testing it.
+ */
+function authorityOf(c: Context): string | undefined {
+  const header = c.req.header("host");
+  if (header) return header;
+  try {
+    const { host } = new URL(c.req.url);
+    return host || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -107,14 +141,14 @@ export interface OriginGuardOptions {
  * Mount BEFORE any route, including reads.
  */
 export function originGuard(opts: OriginGuardOptions = {}) {
-  const allowMissingHost = opts.allowMissingHost ?? true;
+  const allowMissingHost = opts.allowMissingHost ?? false;
 
   return async function originGuardMiddleware(c: Context, next: Next) {
-    const host = c.req.header("host");
+    const host = authorityOf(c);
 
     if (host === undefined) {
       if (!allowMissingHost) {
-        return c.json({ error: "Missing Host header" }, 403);
+        return c.json({ error: "Missing or unusable Host" }, 403);
       }
     } else if (!isLoopbackHost(host)) {
       // Do not echo the offending Host back — it is attacker-controlled and

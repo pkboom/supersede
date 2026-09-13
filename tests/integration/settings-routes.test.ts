@@ -25,7 +25,7 @@ describe("/api/settings (integration, single-user)", () => {
 
   it("GET returns defaults + apiKeyConfigured: true when env is set", async () => {
     const app = build("sk-real");
-    const res = await app.fetch(new Request("http://test/api/settings"));
+    const res = await app.fetch(new Request("http://localhost/api/settings"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       defaultProvider: "anthropic",
@@ -37,7 +37,7 @@ describe("/api/settings (integration, single-user)", () => {
 
   it("GET returns apiKeyConfigured: false when env is unset", async () => {
     const app = build(null);
-    const res = await app.fetch(new Request("http://test/api/settings"));
+    const res = await app.fetch(new Request("http://localhost/api/settings"));
     const body = (await res.json()) as { apiKeyConfigured: boolean };
     expect(body.apiKeyConfigured).toBe(false);
   });
@@ -45,7 +45,7 @@ describe("/api/settings (integration, single-user)", () => {
   it("PATCH accepts opus and sonnet", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultModel: "claude-sonnet-4-6" }),
@@ -55,7 +55,7 @@ describe("/api/settings (integration, single-user)", () => {
     const body = (await res.json()) as { defaultModel: string };
     expect(body.defaultModel).toBe("claude-sonnet-4-6");
 
-    const back = await app.fetch(new Request("http://test/api/settings"));
+    const back = await app.fetch(new Request("http://localhost/api/settings"));
     expect((await back.json()) as { defaultModel: string }).toMatchObject({
       defaultModel: "claude-sonnet-4-6",
     });
@@ -64,7 +64,7 @@ describe("/api/settings (integration, single-user)", () => {
   it("PATCH rejects unknown model with 400", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultModel: "claude-haiku-4-5" }),
@@ -76,7 +76,7 @@ describe("/api/settings (integration, single-user)", () => {
   it("PATCH rejects non-string defaultModel with 400", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultModel: 42 }),
@@ -88,7 +88,7 @@ describe("/api/settings (integration, single-user)", () => {
   it("PATCH accepts defaultMode: 'cli'", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultMode: "cli" }),
@@ -98,7 +98,7 @@ describe("/api/settings (integration, single-user)", () => {
     const body = (await res.json()) as { defaultMode: string };
     expect(body.defaultMode).toBe("cli");
 
-    const back = await app.fetch(new Request("http://test/api/settings"));
+    const back = await app.fetch(new Request("http://localhost/api/settings"));
     expect((await back.json()) as { defaultMode: string }).toMatchObject({
       defaultMode: "cli",
     });
@@ -107,7 +107,7 @@ describe("/api/settings (integration, single-user)", () => {
   it("PATCH rejects unknown defaultMode with 400", async () => {
     const app = build();
     const res = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultMode: "subscription" }),

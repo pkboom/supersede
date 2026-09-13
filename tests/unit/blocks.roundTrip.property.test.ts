@@ -175,11 +175,13 @@ describe("§0.3 fidelity gate — N-generation idempotency", () => {
           return button.attrs?.get("href");
         };
         const gens = generations(buttonWith("href", value));
-        // gen1 is the serializer's normal form; every later generation must
-        // read back identically.
-        const expected = read(gens[1]!);
+        // Compare gen1 against the INPUT, not against itself. Comparing later
+        // generations to gen1 only re-establishes what assertIdempotent already
+        // proves — it cannot see a value mangled exactly once and then stable,
+        // which is the precise shape of the bug this block exists to catch.
+        expect(read(gens[1]!), "generation 1 vs input").toBe(value);
         for (let i = 2; i < gens.length; i++) {
-          expect(read(gens[i]!), `generation ${i}`).toBe(expected);
+          expect(read(gens[i]!), `generation ${i}`).toBe(value);
         }
       });
     }
@@ -391,6 +393,126 @@ const nonEmptyDocumentArb: fc.Arbitrary<string> = fc
   )
   .map((secs) => `<mjml><mj-body>${secs.join("")}</mj-body></mjml>`);
 
+// ---------------------------------------------------------------------------
+// THE WRITE PATH.
+//
+// Everything above generates SOURCE-realistic values, on the stated reasoning
+// that a raw `<` or `"` "cannot occur in well-formed source". That is true, and
+// it is exactly why the first attempt at the §0.2 fix shipped a worse bug than
+// the one it fixed: `node.text` and `attrs` are also written PROGRAMMATICALLY,
+// and those writers hold raw characters.
+//
+//   - the inline canvas editor assigns `target.textContent` verbatim
+//   - the properties form assigns raw input values
+//   - the component expander assigns `ov-*` values
+//
+// With text escaping removed, typing `a < b` serialized to `<mj-text>a < b</mj-text>`,
+// which re-parsed to `"a "` — silently truncated, then persisted. The gate could
+// not see it because its corpus was scoped around the hole.
+//
+// So these cases enter through assignment, not through parsing. A fix that only
+// satisfies the source corpus does not satisfy this one.
+// ---------------------------------------------------------------------------
+
+const SEED = `<mjml><mj-body><mj-section><mj-column><mj-text>seed</mj-text><mj-button href="#">seed</mj-button></mj-column></mj-section></mj-body></mjml>`;
+
+function leafOf(doc: ReturnType<typeof parseMjml>, index: 0 | 1) {
+  const section = doc.body[0] as { children?: unknown[] };
+  const column = section.children?.[0] as { children?: unknown[] };
+  return column.children?.[index] as {
+    text?: string;
+    attrs: Map<string, string>;
+  };
+}
+
+/** Decode the entities a browser would, to check what the user actually sees. */
+function asDisplayed(v: string): string {
+  return v
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+describe("§0.3 fidelity gate — the programmatic WRITE path", () => {
+  const RAW_INPUTS: Array<[string, string]> = [
+    ["bare less-than", "a < b"],
+    ["bare ampersand", "AT&T"],
+    ["quote", 'say "hi"'],
+    ["greater-than", "Tom & Jerry > all"],
+    ["tag-shaped injection", "</mj-text><script>alert(1)</script>"],
+    ["mixed", "5 > 3 & 2 < 4"],
+    ["ampersand then letters", "R&D team"],
+    ["trailing ampersand", "Q&A &"],
+  ];
+
+  for (const [label, raw] of RAW_INPUTS) {
+    it(`text assigned raw (${label}) survives a round-trip intact`, () => {
+      const doc = parseMjml(SEED);
+      leafOf(doc, 0).text = raw;
+      const emitted = serializeMjml(doc);
+      const readBack = leafOf(parseMjml(emitted), 0).text ?? "";
+      // The user must see back exactly what they typed.
+      expect(asDisplayed(readBack)).toBe(raw);
+    });
+
+    it(`text assigned raw (${label}) is then idempotent`, () => {
+      const doc = parseMjml(SEED);
+      leafOf(doc, 0).text = raw;
+      // Once written, the document must be a fixpoint like any other.
+      assertIdempotent(serializeMjml(doc));
+    });
+
+    it(`attribute assigned raw (${label}) survives a round-trip intact`, () => {
+      const doc = parseMjml(SEED);
+      leafOf(doc, 1).attrs.set("href", raw);
+      const emitted = serializeMjml(doc);
+      const readBack = leafOf(parseMjml(emitted), 1).attrs.get("href") ?? "";
+      expect(asDisplayed(readBack)).toBe(raw);
+    });
+
+    it(`attribute assigned raw (${label}) is then idempotent`, () => {
+      const doc = parseMjml(SEED);
+      leafOf(doc, 1).attrs.set("href", raw);
+      assertIdempotent(serializeMjml(doc));
+    });
+  }
+
+  it("a raw < in text cannot truncate the document", () => {
+    // The specific regression: everything after `<` was destroyed.
+    const doc = parseMjml(SEED);
+    leafOf(doc, 0).text = "a < b";
+    const out = serializeMjml(doc);
+    expect(leafOf(parseMjml(out), 0).text).toBe("a &lt; b");
+    // And the sibling button must still be there — truncation ate it before.
+    expect(leafOf(parseMjml(out), 1)).toBeDefined();
+  });
+
+  it("a tag-shaped input cannot break out of its element", () => {
+    const doc = parseMjml(SEED);
+    leafOf(doc, 0).text = "</mj-text><mj-text>injected</mj-text>";
+    const reparsed = parseMjml(serializeMjml(doc));
+    const section = reparsed.body[0] as { children?: unknown[] };
+    const column = section.children?.[0] as { children?: unknown[] };
+    // Still exactly the two leaves we started with — nothing was injected.
+    expect(column.children).toHaveLength(2);
+  });
+
+  it("KNOWN LIMIT: a typed literal entity is read back as that entity", () => {
+    // Idempotent escaping cannot distinguish "the user typed &amp;" from "this
+    // value came from source and already holds an entity". We resolve the
+    // ambiguity in favour of source, because source documents containing
+    // entities are universal and typing a literal entity into a WYSIWYG field
+    // is vanishingly rare — and the alternative (escaping every `&`) is exactly
+    // the compounding §0.2 corruption.
+    const doc = parseMjml(SEED);
+    leafOf(doc, 0).text = "a &amp; b";
+    const readBack = leafOf(parseMjml(serializeMjml(doc)), 0).text;
+    expect(readBack).toBe("a &amp; b");
+    expect(asDisplayed(readBack!)).toBe("a & b"); // displays as `&`, not `&amp;`
+  });
+});
+
 describe("§0.3 fidelity gate — generated documents", () => {
   it("serialize(parse(x)) reaches a fixpoint at generation 1 and holds", () => {
     fc.assert(
@@ -469,9 +591,23 @@ describe("§0.3 — normalizeWhitespace has its own tests", () => {
 
   it("handles a close tag immediately followed by a sibling close tag", () => {
     // The documented boundary bug: `lastIndexOf("<", ...)` could match the
-    // SIBLING's `<` instead of the in-match close tag.
-    const src = `<mj-column><mj-text>hi</mj-text></mj-column>`;
-    expect(normalizeWhitespace(src)).toBe(src);
+    // SIBLING's `<` instead of the in-match close tag, over-extending the
+    // protected range.
+    //
+    // The obvious fixture — `<mj-column><mj-text>hi</mj-text></mj-column>` —
+    // does NOT discriminate: the over-wide range swallows `</mj-text>` verbatim,
+    // and since that span holds no collapsible whitespace the output is
+    // byte-identical under both the buggy and fixed versions. A regression test
+    // that passes against the bug it is named for is worse than none, so the
+    // fixture below puts collapsible whitespace where the erroneous extension
+    // would reach.
+    const src = `<mj-column><mj-text>hi</mj-text></mj-column>\n  <mj-column>\n    <mj-text>  a  b  </mj-text>\n  </mj-column>`;
+    const out = normalizeWhitespace(src);
+    // Inner text whitespace preserved in BOTH protected ranges...
+    expect(out).toContain(">  a  b  <");
+    expect(out).toContain(">hi<");
+    // ...and the inter-tag whitespace between the two columns is gone.
+    expect(out).toContain("</mj-column><mj-column>");
   });
 
   it("handles two adjacent protected ranges", () => {

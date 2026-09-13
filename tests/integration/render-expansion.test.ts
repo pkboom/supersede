@@ -73,9 +73,25 @@ describe("render expands before compiling", () => {
     expect(body.html as string).toContain("hi");
   });
 
-  it("returns unstamped as an array (§0.5)", async () => {
-    const { body } = await render(appWith(storeWith()), TEMPLATE);
-    expect(Array.isArray(body.unstamped)).toBe(true);
+  it("reports a REAL stamping gap in unstamped (§0.5)", async () => {
+    // Asserting only `Array.isArray` can fail solely if the field is deleted.
+    // Drive an actual gap instead: mj-social has no detector that matches
+    // mjml's rendered output for its element, so it lands in `missing`.
+    const withGap =
+      `<mjml><mj-body><mj-section><mj-column>` +
+      `<mj-social mode="horizontal"><mj-social-element name="facebook" href="#" /></mj-social>` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { body } = await render(appWith(new InMemoryComponentStore()), withGap);
+    const unstamped = body.unstamped as string[];
+    expect(Array.isArray(unstamped)).toBe(true);
+    // Compare against what the stamper itself reports, so this stays true if
+    // detector coverage changes — what must hold is that the route PASSES the
+    // gap through rather than swallowing it in a console.warn.
+    const expectedMissing = stampMjmlPaths(
+      withGap,
+      (mjml2html(withGap, { validationLevel: "soft" }) as { html: string }).html
+    ).missing;
+    expect(unstamped).toEqual(expectedMissing);
   });
 
   it("does NOT serve stale HTML when the component content changes", async () => {
@@ -133,5 +149,53 @@ describe("the mis-stamping failure this ordering prevents", () => {
 
     const actualCount = (html.match(/data-mjml-path=/g) ?? []).length;
     expect(actualCount).toBe(expectedCount);
+  });
+});
+
+describe("mj-include is refused (arbitrary local file read)", () => {
+  it("rejects mj-include with 422 rather than compiling it", async () => {
+    // mjml resolves mj-include against the SERVER filesystem, and its
+    // directory-traversal fix (CVE-2020-12827) is incomplete through 4.18.0 —
+    // the pinned version, with no non-breaking upgrade. Verified reachable from
+    // this route before the guard: relative traversal, absolute paths and
+    // type="css" all returned file contents in the HTTP 200 body.
+    const src =
+      `<mjml><mj-body><mj-section><mj-column>` +
+      `<mj-include path="/etc/hosts" type="html" />` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(status).toBe(422);
+    expect(body.error as string).toMatch(/mj-include/);
+  });
+
+  it("rejects it regardless of spacing or case", async () => {
+    for (const tag of [`<mj-include path="x" />`, `< mj-include path="x" />`, `<MJ-INCLUDE path="x" />`]) {
+      const src = `<mjml><mj-body><mj-section><mj-column>${tag}</mj-column></mj-section></mj-body></mjml>`;
+      const { status } = await render(appWith(new InMemoryComponentStore()), src);
+      expect(status, tag).toBe(422);
+    }
+  });
+
+  it("does not reject a tag that merely starts with the same prefix", async () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-text>ok</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    const { status } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(status).toBe(200);
+  });
+});
+
+describe("mjmlErrors is surfaced, not discarded", () => {
+  it("returns an empty array for a clean render", async () => {
+    const { body } = await render(appWith(storeWith()), TEMPLATE);
+    expect(body.mjmlErrors).toEqual([]);
+  });
+
+  it("surfaces mjml's own diagnostics — the guard's independent feed", async () => {
+    // An unknown element is dropped by mjml under soft validation with an entry
+    // in result.errors, which this route previously reached by type assertion
+    // and never read.
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-nonsense /></mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(new InMemoryComponentStore()), src);
+    expect(status).toBe(200);
+    expect((body.mjmlErrors as string[]).length).toBeGreaterThan(0);
   });
 });

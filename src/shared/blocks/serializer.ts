@@ -17,7 +17,7 @@ import { BLOCK_REGISTRY } from "./registry.js";
 /**
  * Escape an attribute value for emission.
  *
- * **Only `"` is escaped, deliberately (plan §0.2).** The parser runs
+ * **Escaping is IDEMPOTENT, not absent (plan §0.2, as corrected).** The parser runs
  * fast-xml-parser with `processEntities: false`, so a value arrives holding the
  * LITERAL SOURCE CHARACTERS — source `&amp;` is five characters in the Map, not
  * one `&`. Re-escaping `&` here therefore had no inverse anywhere and compounded
@@ -27,22 +27,65 @@ import { BLOCK_REGISTRY } from "./registry.js";
  *     gen 1: href="/x?a=1&amp;amp;b=2"
  *     gen 2: href="/x?a=1&amp;amp;amp;b=2"
  *
- * The trigger was every UTM tracking URL and every `&` in body copy. Because
- * values round-trip as source text, emitting them unchanged is what makes
- * parse->serialize reach a fixpoint.
+ * The trigger was every UTM tracking URL and every `&` in body copy.
  *
- * `"` IS still escaped, and must be: a value set programmatically (e.g. by the
- * properties form or the component expander) can legitimately contain a literal
- * quote, which would otherwise terminate the attribute and produce invalid MJML.
- * That escape is idempotent in practice because a value parsed from source
- * carries `&quot;`, never a bare `"`.
+ * **The first fix for this went too far and opened a worse hole.** It dropped
+ * escaping entirely, on evidence gathered from source round-trips alone. But
+ * `node.text` and `attrs` are ALSO written programmatically — the inline canvas
+ * editor assigns raw `textContent`, and the properties form assigns raw input
+ * values. With escaping removed, typing `a < b` into a text block serialized to
+ * `<mj-text>a < b</mj-text>`, which re-parses to `"a "` — everything after the
+ * `<` silently destroyed and then persisted. Typing `</mj-text><script>` broke
+ * the document structure outright. That is strictly worse than the entity bug
+ * it replaced: the entity bug was linear and reversible; this was immediate and
+ * unrecoverable.
+ *
+ * The correct fix escapes what must be escaped, but does so IDEMPOTENTLY, so
+ * both the source path and the write path reach a fixpoint. See
+ * BARE_AMPERSAND.
  *
  * NOT to be unified with `escapeHtml` in `headEdit.ts:59-61`, which
  * double-escapes DELIBERATELY under a different contract and is asserted at
  * `blocks.headEdit.test.ts:70`. Identical-looking code, opposite requirement.
  */
+/**
+ * Matches an `&` that does NOT already begin a character reference. This is
+ * what makes escaping IDEMPOTENT, which is the property the whole round-trip
+ * gate rests on:
+ *
+ *   - a value parsed from source holds `&amp;` as five literal characters
+ *     (processEntities:false). The `&` is followed by `amp;`, so it is left
+ *     alone and the value round-trips byte-equal.
+ *   - a value written programmatically — the inline editor, the properties
+ *     form, the component expander — holds a raw `&`. Nothing follows it that
+ *     looks like an entity, so it IS escaped, and the NEXT pass leaves the
+ *     result alone.
+ *
+ * Both paths reach a fixpoint at generation 1.
+ */
+const BARE_AMPERSAND =
+  /&(?!(?:[A-Za-z][A-Za-z0-9]{1,31}|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});)/g;
+
 function escapeAttrValue(v: string): string {
-  return v.replace(/"/g, "&quot;");
+  return v
+    .replace(BARE_AMPERSAND, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Escape text content, idempotently (see BARE_AMPERSAND).
+ *
+ * `<` must always be escaped: a raw `<` cannot occur in text parsed from source
+ * (it would have opened a tag), so escaping it only ever affects the write path
+ * — where leaving it raw silently truncates the document at that character.
+ *
+ * `>` is deliberately NOT escaped. It is harmless in text content, and escaping
+ * it would rewrite every source document that legitimately contains one,
+ * breaking the byte-equal round-trip for no safety gain.
+ */
+function escapeText(v: string): string {
+  return v.replace(BARE_AMPERSAND, "&amp;").replace(/</g, "&lt;");
 }
 
 function indent(level: number): string {
@@ -80,10 +123,7 @@ function serializeBlock(node: BlockNode, level: number): string {
 
   // Leaf with text content
   if (def.contentField === "text" && node.text != null) {
-    // Text is NOT escaped — see escapeAttrValue's note. `node.text` holds the
-    // literal source slice (processEntities:false), so re-escaping `&` here was
-    // the text-content half of the same compounding corruption.
-    return `${ind}<${node.type}${attrsStr}>${node.text}</${node.type}>`;
+    return `${ind}<${node.type}${attrsStr}>${escapeText(node.text)}</${node.type}>`;
   }
 
   // Leaf without text

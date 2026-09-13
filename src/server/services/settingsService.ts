@@ -1,11 +1,21 @@
 import { eq } from "drizzle-orm";
 import type { DbHandle } from "../../db/index.js";
 import { settings } from "../../db/schema.js";
+import {
+  ALLOWED_MODELS,
+  ALLOWED_MODES,
+  type AllowedMode,
+  type AllowedModel,
+} from "../../shared/models.js";
 
-export const ALLOWED_MODELS = ["claude-opus-4-7", "claude-sonnet-4-6"] as const;
-export type AllowedModel = (typeof ALLOWED_MODELS)[number];
-export const ALLOWED_MODES = ["api", "cli"] as const;
-export type AllowedMode = (typeof ALLOWED_MODES)[number];
+// Re-exported from the shared definition so existing importers keep working.
+// See src/shared/models.ts for why there is exactly one definition.
+export {
+  ALLOWED_MODELS,
+  ALLOWED_MODES,
+  type AllowedModel,
+  type AllowedMode,
+} from "../../shared/models.js";
 export const DEFAULT_PROVIDER = "anthropic";
 export const DEFAULT_MODE: AllowedMode = "cli";
 export const DEFAULT_MODEL: AllowedModel = "claude-opus-4-7";

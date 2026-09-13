@@ -34,7 +34,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
 
   async function createTemplate(app: ReturnType<typeof buildApp>, name = "X") {
     const res = await app.fetch(
-      new Request("http://test/api/templates", {
+      new Request("http://localhost/api/templates", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -52,7 +52,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ adapter: stub });
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "make button blue", version: 1 }),
@@ -74,7 +74,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ apiKey: null });
     // Default mode is now `cli`; flip to `api` so the 412 path is reachable.
     const patch = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultMode: "api" }),
@@ -84,7 +84,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
 
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "x", version: 1 }),
@@ -98,7 +98,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ adapter: stub, apiKey: null });
     // Flip mode to cli via the settings route before issuing the query.
     const patch = await app.fetch(
-      new Request("http://test/api/settings", {
+      new Request("http://localhost/api/settings", {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ defaultMode: "cli" }),
@@ -108,7 +108,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
 
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "hello", version: 1 }),
@@ -122,7 +122,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp();
     const res = await app.fetch(
       new Request(
-        "http://test/api/templates/00000000-0000-0000-0000-000000000000/query",
+        "http://localhost/api/templates/00000000-0000-0000-0000-000000000000/query",
         { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ query: "x", version: 1 }) },
       ),
     );
@@ -134,7 +134,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ adapter: stub });
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "x", version: 99 }),
@@ -148,7 +148,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ adapter: malformedStub() });
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "x", version: 1 }),
@@ -156,7 +156,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     );
     expect(res.status).toBe(502);
 
-    const after = await app.fetch(new Request(`http://test/api/templates/${tpl.id}`));
+    const after = await app.fetch(new Request(`http://localhost/api/templates/${tpl.id}`));
     const row = (await after.json()) as { version: number; mjml: string };
     expect(row.version).toBe(1);
     expect(row.mjml).toBe(tpl.mjml);
@@ -167,7 +167,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
       const app = buildApp({ adapter: new StubLLMAdapter(new LLMSchemaError("retries exhausted")) });
       const tpl = await createTemplate(app);
       const res = await app.fetch(
-        new Request(`http://test/api/templates/${tpl.id}/query`, {
+        new Request(`http://localhost/api/templates/${tpl.id}/query`, {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ query: "x", version: 1 }),
@@ -179,7 +179,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
       const app = buildApp({ adapter: new StubLLMAdapter(new LLMError("upstream 500")) });
       const tpl = await createTemplate(app, "Y");
       const res = await app.fetch(
-        new Request(`http://test/api/templates/${tpl.id}/query`, {
+        new Request(`http://localhost/api/templates/${tpl.id}/query`, {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ query: "x", version: 1 }),
@@ -197,7 +197,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     let currentVersion = tpl.version;
     for (let i = 0; i < 60; i++) {
       const res = await app.fetch(
-        new Request(`http://test/api/templates/${tpl.id}/query`, {
+        new Request(`http://localhost/api/templates/${tpl.id}/query`, {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ query: `q${i}`, version: currentVersion }),
@@ -209,7 +209,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
       nowMs += 1;
     }
     const limited = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "61st", version: currentVersion }),
@@ -219,7 +219,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
 
     nowMs += 60 * 60 * 1000 + 1;
     const fresh = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "after-window", version: currentVersion }),
@@ -234,14 +234,14 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const tpl = await createTemplate(app);
     const [r1, r2] = await Promise.all([
       app.fetch(
-        new Request(`http://test/api/templates/${tpl.id}/query`, {
+        new Request(`http://localhost/api/templates/${tpl.id}/query`, {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ query: "first", version: 1 }),
         }),
       ),
       app.fetch(
-        new Request(`http://test/api/templates/${tpl.id}/query`, {
+        new Request(`http://localhost/api/templates/${tpl.id}/query`, {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ query: "second", version: 1 }),
@@ -251,7 +251,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const statuses = [r1.status, r2.status].sort();
     expect(statuses).toEqual([200, 409]);
 
-    const after = await app.fetch(new Request(`http://test/api/templates/${tpl.id}`));
+    const after = await app.fetch(new Request(`http://localhost/api/templates/${tpl.id}`));
     const row = (await after.json()) as { version: number };
     expect(row.version).toBe(2);
   });
@@ -261,7 +261,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp({ adapter: echoStub("ok"), logger: (r) => captured.push(r) });
     const tpl = await createTemplate(app);
     const res = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "x", version: 1 }),
@@ -286,7 +286,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     const app = buildApp();
     const tpl = await createTemplate(app);
     const noVersion = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ query: "x" }),
@@ -294,7 +294,7 @@ describe("/api/templates/:id/query (integration, single-user)", () => {
     );
     expect(noVersion.status).toBe(400);
     const noQuery = await app.fetch(
-      new Request(`http://test/api/templates/${tpl.id}/query`, {
+      new Request(`http://localhost/api/templates/${tpl.id}/query`, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ version: 1 }),
