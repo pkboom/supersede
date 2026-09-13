@@ -34,6 +34,24 @@
  * is supposed to guarantee independently. So `Origin`, when present, must also
  * be loopback.
  *
+ * WHAT THIS DOES NOT COVER, STATED PLAINLY
+ * ----------------------------------------
+ * An HTTP/1.0 request that sends NO `Host` header at all reaches the handler.
+ * `@hono/node-server` substitutes its own `hostname` option into the request
+ * URL when the header is absent, so the authority resolves to the bound address
+ * and passes.
+ *
+ * That is a deliberate limit, not an oversight, and the reasoning is worth
+ * keeping because someone will want to "fix" it: DNS rebinding requires a
+ * BROWSER, and browsers always send `Host`. A local process that omits it gains
+ * nothing it did not already have — it could equally send `Host: localhost`.
+ * So the residual is "a local non-browser client can reach a loopback server",
+ * which is the design of the app, not a bypass of this control.
+ *
+ * What would make it a real hole is the bind address changing. If `main.ts`
+ * ever stops binding `127.0.0.1`, this assumption dies with it and a
+ * Host-less request becomes a LAN entry point.
+ *
  * WHY NOT MATCH THE BOUND PORT
  * ----------------------------
  * Tempting, but wrong in a way that breaks real setups: the server does not

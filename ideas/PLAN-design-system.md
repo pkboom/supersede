@@ -246,14 +246,41 @@ The trigger is not exotic: **every UTM tracking URL and every `&` in body copy.*
 This is a bug today, independent of the pivot. It becomes far worse after it: one propagation
 drives N templates a generation deeper at once, with no human touching them.
 
-**The fix, verified empirically:** keep only `"` → `&quot;` in attribute values, and drop text
-escaping entirely. Proven stable across 5 cycles on entities, JSON-in-attribute, and
-`&quot;`-bearing values.
+> ### CORRECTION — THE FIX PRESCRIBED HERE WAS WRONG, AND IT SHIPPED
+> An earlier version said: *"keep only `"` → `&quot;` in attribute values, and **drop text escaping
+> entirely** — proven stable across 5 cycles."* **That evidence was gathered on the SOURCE path
+> only, and the prescription is a data-loss bug.**
+>
+> `node.text` is also written **programmatically**: `Canvas.tsx:1081` assigns raw browser
+> `textContent` on every inline edit. With escaping removed:
+>
+> ```
+> typed:      a < b
+> serialized: <mj-text>a < b</mj-text>
+> reparsed:   "a "          <- everything after `<` destroyed, then persisted
+> ```
+>
+> and `</mj-text><script>` breaks the document structure outright, surviving into compiled HTML.
+> **Strictly worse than the bug it replaced** — that one was linear (+4 chars/generation) and
+> reversible; this is immediate and unrecoverable.
 
-**STATUS: shipped and independently re-verified** against the original corrupting case — four
-cycles, no drift, and `serialize(parse(x))` is now a **fixed point**. A canonical form therefore
-exists, where the pre-fix measurement was `canonical is idempotent? false`. The
-canonical-vs-canonical diffing strategy is now expressible, which it was not before.
+**The correct fix is IDEMPOTENT escaping, not absent escaping:**
+- escape `&` **only when it does not already begin a character reference**:
+  `/&(?!(?:[A-Za-z][A-Za-z0-9]{1,31}|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});)/g`
+- escape `<` **always** — a raw `<` cannot occur in text parsed from source, so this fires only on
+  the write path
+- do **not** escape `>` — harmless, and escaping it rewrites every source document containing one
+- attribute values: the same, plus `"`
+
+Source values holding `&amp;` as five literal characters are untouched, so the fixpoint property
+survives; programmatic values are escaped once and then stable. Verified over 6 generations in both
+directions.
+
+**Known limit, stated rather than hidden:** a user who *types* the literal characters `&amp;` reads
+them back as that entity. Idempotent escaping cannot distinguish that from source. Resolve in favour
+of source — documents carrying entities are universal, typing a literal entity into a WYSIWYG field
+is vanishingly rare — and note the alternative (escape every `&`) is exactly the compounding bug
+this section exists to fix.
 
 > **Trap:** `headEdit.ts:59–61` double-escapes **deliberately**, asserted at
 > `blocks.headEdit.test.ts:70`. Different contract, identical-looking code. A blanket
@@ -276,13 +303,41 @@ references were never written. `fast-check` is in the repo but wired only to `he
 The restored gate must assert **N-generation idempotency** (parse→serialize ×N is stable for
 N≥4), include an adversarial value corpus, and cover `normalizeWhitespace` directly.
 
+> **AND A SECOND REQUIRED CORPUS — this spec had the same blind spot the §0.2 fix did.**
+> A gate written to the wording above **passed 400 property runs and could not see the data-loss
+> bug**, because its corpus is *source-realistic by construction* — the generator contract even
+> documented "a raw `<` cannot occur in well-formed source." True, and exactly why it was blind.
+>
+> **Add a corpus of values entering by ASSIGNMENT, not by parsing:** build the tree, set `node.text`
+> and `attrs` directly with raw `<`, `&`, `"`, `>`, then assert lossless and idempotent.
+> **Both escaping decisions in the serializer are justified entirely by the programmatic
+> direction**, so a gate exercising only the source direction tests neither of them.
+
 ### 0.4 DEFER the dependency bumps — with a written trigger
 
 An earlier draft of this plan said to take these first. **That was wrong for this deployment
 shape**, and the reversal is deliberate:
 
-- All three CVEs require **attacker-controlled input that does not exist** on a loopback,
-  single-user app: `mjml` (html-minifier ReDoS, GHSA-pfq8-rq6v-vf5m), `fast-xml-parser`
+> **CORRECTION to this section's reasoning.** It argued the CVEs need "attacker-controlled input
+> that does not exist on a loopback single-user app." **For `mjml` that premise is false:
+> LLM-authored MJML *is* attacker-influenced input**, and it flows straight into the compiler. The
+> deferral is still correct — there is no fixed version to upgrade to — but the justification must
+> be **"guarded at the input"**, not "not reachable".
+
+**LIVE: arbitrary local file read through `/api/render`.** MJML resolves
+`<mj-include path="..."/>` against the server filesystem, and its traversal fix
+(CVE-2020-12827) is **incomplete through 4.18.0** — the pinned version, with no non-breaking
+upgrade available. Confirmed reachable: relative traversal, absolute paths, and `type="css"` all
+return file contents **in the HTTP 200 body**, rendered in the canvas and persisted on next save.
+That reaches `.env` — which holds `ANTHROPIC_API_KEY` — and `~/.ssh/`.
+
+The realistic chain is not a remote attacker (the origin guard blocks those). It is: **a user pastes
+a third-party brief into the AI pane → Claude emits an `<mj-include/>` → the file comes back.**
+This repo has **zero legitimate include usage**, so **refuse the tag at the input.** It costs
+nothing and it is the guard the deferral now rests on.
+
+- All three CVEs require attacker-controlled input that, **except for the case above**, does not
+  exist on a loopback single-user app: `mjml` (html-minifier ReDoS, GHSA-pfq8-rq6v-vf5m), `fast-xml-parser`
   (GHSA-gh4j-gqv2-49f6), `ai` (GHSA-rwvc-j5jr-mgvh).
 - `mjml 4→5` "may change render output", and the thing most likely to break is `stampPaths.ts` —
   738 LOC, untested, and it drives **canvas click selection**. That is an unbounded number of
@@ -920,6 +975,15 @@ away by someone optimising elsewhere, and **the overlay breaks first.**
 **Byte offsets must not reach the browser.** The client never sees the expanded MJML, so offsets are
 meaningless there and would only invite someone to attempt arithmetic on them — and with a
 path-to-path join they now have no reason to travel at all.
+
+**`instancePath` elements need a sibling index — `id@rev#n`.** Without it, **two instances of the
+same component produce identical chains**, and "which instance did I click?" — the exact question
+the field exists to answer — is unanswerable.
+
+**The survivor guard must use a scanner with a strictly more permissive failure mode than the
+substitution scanner.** Sharing one scanner makes the guard a **tautology on the expander's own
+fixpoint**: it can only find what the substituter already recognised, which is precisely the set
+that never survives.
 
 **`instancePath` must be a chain, not a string — components nest.** The schema permits
 `<mj-component/>` inside a component body with a depth cap of 5, so one expanded path can sit inside

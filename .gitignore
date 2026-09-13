@@ -21,3 +21,8 @@ data/
 Thumbs.db
 *.swp
 *.swo
+
+# Scratch directories used by review/verification agents. Never source.
+.verif-probe/
+.plan/
+.plan-research/
