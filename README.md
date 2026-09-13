@@ -80,6 +80,29 @@ npm run components -- export   # write expanded MJML to ./workspace/expanded/
 npm run components -- report   # reachability report only
 ```
 
+### Measuring your own templates
+
+Two questions gate further design-system work, and both need REAL templates —
+ideally ten from one brand:
+
+```sh
+npm run measure -- ./path/to/templates        # human-readable
+npm run measure -- ./path/to/templates --json # machine-readable
+```
+
+It reports:
+
+- **Is flat root-level `ov-*` sufficient?** How many attributes differ per
+  repeated block, and — the part that matters more — what share of those
+  differences sit *below* the block root. Overrides reach the root and named
+  text slots only, so a corpus can pass the average and still fail the design.
+  If either number fails, the reference model should be reconsidered before
+  more is built on it.
+- **How much of a template can the parser address?** The opaque share and which
+  constructs caused it. This is a migration cost, not a blocker.
+- **How much body copy carries inline HTML?** Rich `mj-text` has no registry
+  fix, so this bounds the addressable surface independently of components.
+
 ### Status and limits — read before relying on this
 
 - **Experimental, and terminal-only.** There is no UI, no per-brand scoping and

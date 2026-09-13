@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
-    "components": "tsx scripts/component-slice.ts"
+    "components": "tsx scripts/component-slice.ts",
+    "measure": "tsx scripts/measure-templates.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
