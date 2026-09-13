@@ -1336,7 +1336,17 @@ switching triples how often users do this, so `useUnsavedGuard` is **required, n
    unmodeled tag, so the parser gives it its own passthrough node. **Without excluding that case
    every instance reports unreachable and the report is pure noise.** The distinction that matters
    is being swallowed into a *larger* opaque slice, where the reference is not a node at all —
-   merely bytes inside one. Modelling `mj-wrapper` is accepted as a **scoped follow-on**, and it is
+   merely bytes inside one.
+
+   **WITHDRAWN BY MEASUREMENT — do NOT model `mj-wrapper`.** It is **5 of 219 opaque nodes — 2.3%**
+   across a 39-template corpus, so the claim below that modelling it "deletes the unreachable
+   category" is **false for real templates**. The cost is also higher than assumed: mjml renders
+   `mj-wrapper` as a div+table structurally **identical** to `mj-section`, so `stampPaths` would
+   need a detector telling them apart — inside the 738-LOC untested tokenizer whose failure mode is
+   silently mis-targeting canvas clicks. A bad trade at 2.3%. The `RightPanel` help-text fix still
+   stands on its own. Superseded reasoning follows.
+
+   Modelling `mj-wrapper` was accepted as a **scoped follow-on**, and argued to be
    better than free: `RightPanel.tsx:579` **actively instructs users to paste `<mj-wrapper>`**
    while `parser.ts:304` collapses that subtree into an opaque passthrough — **the product is
    instructing people into the hole.** Adding it as a container (`allowedChildren: ["mj-section"]`)
@@ -1681,26 +1691,80 @@ non-editable. **That is real, previously unscoped work** and belongs in the cost
 reverse D-2 — the same probe found a working anchor — but the verdict was explicitly conditional on
 this and the condition was not met.
 
-### Experiment (b): still to run — and it needs a second question, or it can pass while the design fails
-On ten real templates, count how many attributes differ per instance. **If it averages above ~3,
-`ov-*` degenerates into the copy model with worse ergonomics** and D-2 should be re-opened.
+### Experiment (b): RUN. It fails the threshold — and the plan's response to that was wrong.
 
-**The average alone is not sufficient, and this nearly shipped as the gate.** `ov-*` is scoped to
-**flat, root-level** targets — the component's root element plus one designated text node.
-Below-root is out of scope. But the overrides email components actually need are frequently
-below-root: a footer rooted at `mj-section` can have its background overridden but **not its
-unsubscribe link**; a product card can have its padding but **not its CTA**.
+```
+mean differing attributes per instance : 3.48    (threshold: ~3)
+share of differences below the root    : 38%
+opaque share                           : 15.0%   (219/1456 nodes)
+rich mj-text                           : 159/362 (44%)
+```
 
-So measure a second thing, at near-zero extra cost: **what fraction of differing attributes target
-something below the root.** The count can come back at a reassuring 1.8 while every one of those
-1.8 is a nested CTA `href` that flat `ov-*` cannot express — **the average passes and the design
-still fails, for a reason the average was never going to show.**
+**Corpus and its caveat, stated first because it cuts against the conclusion:** 39 public,
+professionally authored templates (mjmlio/email-templates 25, Mailteorite 14), 1,456 parsed nodes —
+**not** one agency's brand corpus. Template libraries are designed to be *varied showcases*, so a
+consistent brand system should measure **lower** variance by construction. This is closer to a worst
+case than a typical one. The shape clustering is also crude: `mj-column[mj-text]` groups every
+single-text column across 39 unrelated designs, which are not the same component.
 
-**A third measurement, near-free: how many distinct components account for the overrides.** If most
-land on the footer, the answer is "the footer needs slots", not a general mechanism.
+**The aggregate understates it, and the split is the real finding:**
 
-The consequence if below-root demand is real: `[ Detach ]` stops being an escape hatch and becomes
-the routine path — **the copy model reached by attrition, through a one-way door.**
+| Shape | n | mean | below-root |
+|---|---|---|---|
+| `mj-column[mj-image,mj-text,mj-button]` | 10 | **14.20** | **100%** |
+| `mj-column[mj-text,mj-text,mj-button]` | 8 | 9.12 | 97% |
+| `mj-column[mj-text,mj-image,mj-text]` | 8 | 6.50 | 100% |
+| `mj-section[mj-column,mj-column]` | 46 | 6.83 | 82% |
+| `mj-button` (leaf) | 61 | 4.30 | **0%** |
+| `mj-text` (leaf) | 203 | 2.78 | **0%** |
+
+Leaf shapes are trivially 0% below-root. **The more a shape resembles a component anyone would
+actually build — a product card, a CTA block — the more of its variance sits beneath the root.**
+That is this plan's own sentence ("a product card can have its padding but not its CTA") confirmed
+by measurement, and it is the part that survives every caveat above: a card's CTA is below its root
+regardless of whose brand it is.
+
+**The number that should govern this decision has not been measured.** It would come from one
+agency's real brand corpus, and nobody has run that. The harness now does it in one command —
+`npm run measure -- <dir>`, recursive, `.mjml` only, JSON out. If a real brand comes back **under 3
+with a low below-root share**, the below-root machinery is still *correct* — a card's CTA is below
+its root either way — but far **less urgent** than the table above implies, and the shipped
+`ov-at-<path>-<attr>` widening could have waited behind declared slots. Run it before treating 38%
+as the design constraint.
+
+### CORRECTION — a failing (b) does NOT re-open D-2, and saying it did was a mistake
+This plan stated that a below-root-dominant result re-opens reference-vs-copy. **That conflated two
+different things.** The measurement says flat root-only `ov-*` is insufficient; it says nothing
+about reference-vs-copy. D-2 rested on opacity asymmetry, diff quality and one-way reversibility —
+**none of which this result touches.**
+
+And the narrow scope was never a finding. An earlier draft asserted *"`ov-*` is scoped to flat,
+root-level targets… below-root is out of scope"* **with no reason given — a scoping decision wearing
+a conclusion's clothes**, which is the same failure class §10.3 names.
+
+**Widening the scope answers the measurement while keeping everything reference was chosen for:**
+content lives once in immutable revisions, an override remains a literal attribute propagation never
+touches, there is still no merge, no base and no conflict resolution, and a revision bump still
+rewrites one attribute value per template. Re-opening D-2 would have surrendered all of that to fix
+a narrower problem than the one measured.
+
+### WARNING — the shipped widening is a targeting syntax, which this section argued against
+`ov-at-<path>-<attr>` (e.g. `ov-at-2-href`, `ov-at-0.1-src`) has shipped, with paths relative to the
+root's element children, comments excluded from the count so a path survives someone adding one, and
+deepest-first application. That is a **positional targeting syntax** — the option the section below
+rejects.
+
+**The brittleness that was mitigated is not the dangerous one.** Excluding comments protects against
+someone adding a comment. It does **not** protect against **r5 rearranging the component's
+interior**, after which `ov-at-2-href` silently resolves to a *different node* — which is precisely
+the silent post-re-pin drift the reference model was chosen to eliminate, arriving through the
+override mechanism.
+
+**Minimum mitigation if the targeting syntax stays** (cheaper than retrofitting slots, and it
+converts silent-wrong-node into a blocking dry-run row, which is the property slots give for free):
+**store the expected tag alongside the path** and **throw at expansion when the resolved element's
+tag no longer matches**. Unresolvable paths already throw; a path that resolves to the *wrong kind
+of element* currently does not, and that is the failure mode that matters.
 
 ### If (b) comes back below-root-dominant, the answer is declared SLOTS — not a targeting syntax
 These look alike in a UI and are not the same thing. Separating them now prevents reintroducing the
@@ -2020,8 +2084,11 @@ only fixture dodges the path entirely, which is why this has never surfaced.
 authored through the **raw-MJML textarea inside its own component editor**. The authoring experience
 is weakest for exactly the content type email uses most.
 
-**Size it before designing around it (ten minutes):** count `mj-text` blocks containing `<` across a
-handful of real templates — same ten as §3.5 and experiment (b). **A caution about the word "provisional":** a design provisional on a count becomes permanent when
+**MEASURED, and it is larger than this section claimed.** Across 39 templates / 1,456 nodes:
+**159 of 219 opaque nodes are rich `mj-text` — 73% of the entire opaque surface** — and **44% of all
+body copy (159/362) carries inline HTML.** An earlier draft called this "the biggest half of the
+problem"; it is closer to **three quarters**. It has no registry fix, it bounds the addressable
+surface independently of components, and **it ships today**. **A caution about the word "provisional":** a design provisional on a count becomes permanent when
 the count does not get run, and under schedule pressure it drifts toward the *cheaper* build — here,
 the fallback-with-good-manners. So this is a **blocker on the copy, not a note attached to it**, and
 the honest statement is: **if the count has not run, the state of this design is *unknown*, not
