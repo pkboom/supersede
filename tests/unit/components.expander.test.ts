@@ -745,25 +745,25 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
     `<mjml><mj-body><mj-section><mj-component component-id="brand/card" revision="1"${ov} /></mj-section></mj-body></mjml>`;
 
   it("overrides a nested CTA's href — the case §11 predicted would fail", () => {
-    const { mjml } = expand(tpl(` ov-at-2-href="https://custom.test"`), card());
+    const { mjml } = expand(tpl(` ov-tag-2="mj-button" ov-at-2-href="https://custom.test"`), card());
     expect(mjml).toContain(`href="https://custom.test"`);
     expect(mjml).not.toContain("https://default.test");
   });
 
   it("leaves sibling nodes untouched", () => {
-    const { mjml } = expand(tpl(` ov-at-2-href="https://custom.test"`), card());
+    const { mjml } = expand(tpl(` ov-tag-2="mj-button" ov-at-2-href="https://custom.test"`), card());
     expect(mjml).toContain(`src="/a.png"`);
     expect(mjml).toContain("Copy");
   });
 
   it("adds an attribute the nested node did not have", () => {
-    const { mjml } = expand(tpl(` ov-at-0-alt="Product photo"`), card());
+    const { mjml } = expand(tpl(` ov-tag-0="mj-image" ov-at-0-alt="Product photo"`), card());
     expect(mjml).toContain(`alt="Product photo"`);
   });
 
   it("applies several overrides to different depths at once", () => {
     const { mjml } = expand(
-      tpl(` ov-at-0-alt="Photo" ov-at-2-href="https://x.test" ov-padding="4px"`),
+      tpl(` ov-tag-0="mj-image" ov-at-0-alt="Photo" ov-tag-2="mj-button" ov-at-2-href="https://x.test" ov-padding="4px"`),
       card()
     );
     expect(mjml).toContain(`alt="Photo"`);
@@ -777,7 +777,7 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
       "brand/wrap",
       `<mj-section><mj-column><mj-button href="https://default.test">Go</mj-button></mj-column></mj-section>`
     );
-    const src = `<mjml><mj-body><mj-component component-id="brand/wrap" revision="1" ov-at-0.0-href="https://deep.test" /></mj-body></mjml>`;
+    const src = `<mjml><mj-body><mj-component component-id="brand/wrap" revision="1" ov-tag-0.0="mj-button" ov-at-0.0-href="https://deep.test" /></mj-body></mjml>`;
     expect(expand(src, s).mjml).toContain(`href="https://deep.test"`);
   });
 
@@ -787,17 +787,17 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
       "brand/c",
       `<mj-column><!-- a note --><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button></mj-column>`
     );
-    const src = `<mjml><mj-body><mj-section><mj-component component-id="brand/c" revision="1" ov-at-1-href="https://custom.test" /></mj-section></mj-body></mjml>`;
+    const src = `<mjml><mj-body><mj-section><mj-component component-id="brand/c" revision="1" ov-tag-1="mj-button" ov-at-1-href="https://custom.test" /></mj-section></mj-body></mjml>`;
     expect(expand(src, s).mjml).toContain(`href="https://custom.test"`);
   });
 
   it("records the binding in the region's overridable map", () => {
-    const { regions } = expand(tpl(` ov-at-2-href="https://x.test"`), card());
+    const { regions } = expand(tpl(` ov-tag-2="mj-button" ov-at-2-href="https://x.test"`), card());
     expect(regions[0]!.overridable.get("ov-at-2-href")).toBe("2");
   });
 
   it("throws when the path does not resolve", () => {
-    expect(() => expand(tpl(` ov-at-9-href="https://x.test"`), card())).toThrow(
+    expect(() => expand(tpl(` ov-tag-9="mj-button" ov-at-9-href="https://x.test"`), card())).toThrow(
       /no element at path 9/
     );
   });
@@ -813,13 +813,13 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
   });
 
   it("escapes a quote in a path override value, like the root path does", () => {
-    const { mjml } = expand(tpl(` ov-at-2-alt='say "hi"'`), card());
+    const { mjml } = expand(tpl(` ov-tag-2="mj-button" ov-at-2-alt='say "hi"'`), card());
     expect(mjml).toContain("&quot;hi&quot;");
   });
 
   it("keeps the expansion idempotent and compilable", () => {
     const store = card();
-    const src = tpl(` ov-at-2-href="https://x.test/?a=1&amp;b=2"`);
+    const src = tpl(` ov-tag-2="mj-button" ov-at-2-href="https://x.test/?a=1&amp;b=2"`);
     const first = expand(src, store).mjml;
     expect(expand(src, store).mjml).toBe(first);
     expect(first).not.toContain("&amp;amp;");
@@ -828,8 +828,82 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
   });
 
   it("does not change the stored template — blast radius is still the pin", () => {
-    const src = tpl(` ov-at-2-href="https://x.test"`);
+    const src = tpl(` ov-tag-2="mj-button" ov-at-2-href="https://x.test"`);
     expand(src, card());
     expect(src).toContain(`revision="1"`);
+  });
+
+
+  // ---- tag assertions (ov-tag-<path>) ----
+  //
+  // An index path is positional and points into a revision that is DESIGNED to
+  // change. Without these, r5 reordering the component's interior makes
+  // `ov-at-2-href` resolve to a different element, mjml's soft validation drops
+  // the attribute on the wrong node without an error, and every re-pinned
+  // template silently loses its link at HTTP 200.
+
+  it("throws when the path resolves to a different tag than asserted", () => {
+    const before = new InMemoryComponentStore();
+    before.publish(
+      "brand/card",
+      `<mj-column><mj-image src="/a.png" /><mj-text>Copy</mj-text><mj-button href="https://default.test">Go</mj-button></mj-column>`
+    );
+    const after = new InMemoryComponentStore();
+    // r2 moves the button ahead of the text — index 2 is now an mj-text.
+    after.publish(
+      "brand/card",
+      `<mj-column><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button><mj-text>Copy</mj-text></mj-column>`
+    );
+    const src = tpl(` ov-tag-2="mj-button" ov-at-2-href="https://custom.test"`);
+    expect(expand(src, before).mjml).toContain("https://custom.test");
+    expect(() => expand(src, after)).toThrow(/resolves to <mj-text>.*asserts <mj-button>/s);
+  });
+
+  it("without the guard the same rearrangement would land on the wrong node", () => {
+    // Pins the exact silent corruption the assertion exists to prevent: the
+    // override value ends up on mj-text and the button keeps its default href.
+    const after = new InMemoryComponentStore();
+    after.publish(
+      "brand/card",
+      `<mj-column><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button><mj-text>Copy</mj-text></mj-column>`
+    );
+    // Asserting the tag the path NOW resolves to proves the override really
+    // does target that node — which is why omitting the assertion is unsafe.
+    const { mjml } = expand(
+      tpl(` ov-tag-2="mj-text" ov-at-2-href="https://custom.test"`),
+      after
+    );
+    expect(mjml).toMatch(/<mj-text[^>]*href="https:\/\/custom.test"/);
+    expect(mjml).toContain("https://default.test");
+  });
+
+  it("requires an assertion for every path override", () => {
+    expect(() => expand(tpl(` ov-at-2-href="https://x.test"`), card())).toThrow(
+      /has no ov-tag-2 assertion/
+    );
+  });
+
+  it("rejects an assertion with no matching override — a stale or mistyped guard", () => {
+    expect(() =>
+      expand(tpl(` ov-tag-2="mj-button" ov-at-2-href="https://x.test" ov-tag-0="mj-image"`), card())
+    ).toThrow(/ov-tag-0 .*no matching/);
+  });
+
+  it("rejects a malformed assertion path", () => {
+    expect(() => expand(tpl(` ov-tag-abc="mj-button"`), card())).toThrow(
+      /Malformed tag assertion/
+    );
+  });
+
+  it("rejects an assertion value that is not a tag name", () => {
+    expect(() => expand(tpl(` ov-tag-2="not a tag"`), card())).toThrow(/Invalid tag name/);
+  });
+
+  it("does not treat ov-tag-* as a root attribute", () => {
+    const { mjml } = expand(
+      tpl(` ov-tag-2="mj-button" ov-at-2-href="https://x.test"`),
+      card()
+    );
+    expect(mjml).not.toContain("tag-2=");
   });
 });

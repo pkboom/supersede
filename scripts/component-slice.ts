@@ -375,8 +375,8 @@ function cmdDemo(): void {
     const src =
       `<mjml><mj-body><mj-section>` +
       `<mj-component component-id="${CARD_ID}" revision="1" ` +
-      `ov-at-0-alt="Running shoe, side view" ` +
-      `ov-at-2-href="https://shoe.test/p/nimbus-24" ` +
+      `ov-tag-0="mj-image" ov-at-0-alt="Running shoe, side view" ` +
+      `ov-tag-2="mj-button" ov-at-2-href="https://shoe.test/p/nimbus-24" ` +
       `ov-padding="12px" />` +
       `</mj-section></mj-body></mjml>`;
     const { mjml, regions } = expand(src, store);

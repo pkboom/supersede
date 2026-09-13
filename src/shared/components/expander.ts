@@ -33,6 +33,7 @@ import {
   MAX_EXPANSION_DEPTH,
   OVERRIDE_PREFIX,
   PATH_PREFIX,
+  TAG_ASSERT_PREFIX,
   SLOT_ATTR,
   SLOT_PREFIX,
   ComponentNotFoundError,
@@ -199,9 +200,26 @@ function applyOverrides(
   const slotOverrides = new Map<string, string>();
   /** path string -> (attr -> value) */
   const pathOverrides = new Map<string, Map<string, string>>();
+  /** path string -> asserted tag name (see TAG_ASSERT_PREFIX) */
+  const tagAsserts = new Map<string, string>();
 
   for (const [key, value] of overrides) {
-    if (key.startsWith(PATH_PREFIX)) {
+    // `ov-tag-` must be tested BEFORE `ov-` or it falls through to the root
+    // branch and quietly becomes a root attribute named `tag-2`.
+    if (key.startsWith(TAG_ASSERT_PREFIX)) {
+      const pathStr = key.slice(TAG_ASSERT_PREFIX.length);
+      if (!/^\d+(\.\d+)*$/.test(pathStr)) {
+        throw new ExpansionError(
+          `Malformed tag assertion "${key}" on "${componentId}": expected ${TAG_ASSERT_PREFIX}<path>, e.g. ${TAG_ASSERT_PREFIX}0.2`
+        );
+      }
+      if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(value)) {
+        throw new ExpansionError(
+          `Invalid tag name "${value}" in "${key}" on "${componentId}": expected an element name, e.g. mj-button`
+        );
+      }
+      tagAsserts.set(pathStr, value);
+    } else if (key.startsWith(PATH_PREFIX)) {
       // `ov-at-<path>-<attr>`; the path is digits and dots, so the FIRST `-`
       // after it separates path from attribute name. That keeps attribute
       // names containing dashes (background-color) unambiguous.
@@ -263,6 +281,27 @@ function applyOverrides(
   // Applied DEEPEST-FIRST so that rewriting one element's open tag cannot
   // invalidate the offsets of another override still to be applied. Rewriting
   // a shallower element first would shift every offset inside it.
+  // Every path override MUST carry a tag assertion, and every assertion must
+  // belong to one. The first rule is what makes the guard a guard; the second
+  // catches a stale or mistyped assertion, which would otherwise sit in the
+  // template looking like protection it is not providing.
+  for (const pathStr of pathOverrides.keys()) {
+    if (!tagAsserts.has(pathStr)) {
+      throw new ExpansionError(
+        `Path override ${PATH_PREFIX}${pathStr}-* on "${componentId}" has no ${TAG_ASSERT_PREFIX}${pathStr} assertion. ` +
+          `An index path is positional and the component's interior can be rearranged by a later revision, ` +
+          `so the expected tag is required, e.g. ${TAG_ASSERT_PREFIX}${pathStr}="mj-button".`
+      );
+    }
+  }
+  for (const pathStr of tagAsserts.keys()) {
+    if (!pathOverrides.has(pathStr)) {
+      throw new ExpansionError(
+        `Tag assertion ${TAG_ASSERT_PREFIX}${pathStr} on "${componentId}" has no matching ${PATH_PREFIX}${pathStr}-* override`
+      );
+    }
+  }
+
   const paths = [...pathOverrides.keys()].sort(
     (a, b) => b.split(".").length - a.split(".").length || b.localeCompare(a)
   );
@@ -277,6 +316,13 @@ function applyOverrides(
     if (!target) {
       throw new ExpansionError(
         `Component "${componentId}" has no element at path ${pathStr} for override ${PATH_PREFIX}${pathStr}-*`
+      );
+    }
+    const expectedTag = tagAsserts.get(pathStr)!;
+    if (target.name !== expectedTag) {
+      throw new ExpansionError(
+        `Path ${pathStr} in "${componentId}" resolves to <${target.name}>, but the override asserts <${expectedTag}>. ` +
+          `The component's interior has changed shape since this override was written — re-point it rather than removing the assertion.`
       );
     }
     const attrs: ScannedAttr[] = [...target.attrs];

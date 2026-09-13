@@ -1766,6 +1766,25 @@ converts silent-wrong-node into a blocking dry-run row, which is the property sl
 tag no longer matches**. Unresolvable paths already throw; a path that resolves to the *wrong kind
 of element* currently does not, and that is the failure mode that matters.
 
+#### RESOLVED — the mitigation has shipped, and it is required rather than optional
+The critique is accepted in full and was right to be raised: the brittleness that was mitigated
+(comments) is trivial next to the one that was not (rearrangement). Under mjml's soft validation an
+attribute applied to the wrong node is **dropped without an error**, so the failure was HTTP 200
+with the override silently gone — strictly worse than an unexpanded reference, which at least
+leaves a survivor for the guard to find.
+
+Every `ov-at-<path>-<attr>` now **requires** a companion `ov-tag-<path>="mj-button"`, and expansion
+throws when the resolved element's tag differs. **Required, not optional, is the whole point** — an
+opt-in guard on a silent-corruption path is documentation, not a guard, and the template author who
+most needs it is the one least likely to add it. An assertion with no matching override also throws,
+so a stale guard left behind by an edit cannot sit in a template looking like protection it is no
+longer providing.
+
+**What it does not close, stated plainly rather than left for the next reader to discover:** two
+siblings with the **same tag** swapping places still resolves to the wrong one. Declared slots
+remain the real answer, and are still not built. This converts the dominant failure mode from
+silent-wrong-node into a loud throw; it does not retire the section below.
+
 ### If (b) comes back below-root-dominant, the answer is declared SLOTS — not a targeting syntax
 These look alike in a UI and are not the same thing. Separating them now prevents reintroducing the
 exact failure the reference model was chosen to eliminate:

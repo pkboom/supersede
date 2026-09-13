@@ -64,6 +64,30 @@ export const SLOT_PREFIX = "ov-slot-";
  */
 export const PATH_PREFIX = "ov-at-";
 
+/**
+ * Required companion to every `ov-at-` override: the tag the path is expected
+ * to resolve to. `ov-at-2-href="..."` must be accompanied by
+ * `ov-tag-2="mj-button"`, and expansion throws if the element at path `2` is
+ * not an `mj-button`.
+ *
+ * **WHY THIS IS REQUIRED RATHER THAN OPTIONAL.** An index path is positional,
+ * and the thing it indexes into is a component revision that is *designed to
+ * change*. If r5 reorders the component's interior, `ov-at-2-href` silently
+ * resolves to a DIFFERENT element. Under mjml's soft validation an unknown
+ * attribute on the wrong node is dropped without an error, so every template
+ * that bumped its pin loses its link and still renders HTTP 200 — the exact
+ * silent post-re-pin drift the reference model was chosen to eliminate,
+ * re-entering through the override mechanism. An optional guard on a
+ * silent-corruption path is not a guard; it is documentation.
+ *
+ * **What this does NOT catch, stated plainly:** two siblings with the SAME tag
+ * swapping places. `ov-at-2-href` asserted as `mj-button` still applies to the
+ * wrong button. Declared slots are the real answer to that (§11); this converts
+ * the dominant failure from silent-wrong-node into a loud throw, and does not
+ * claim to close the class.
+ */
+export const TAG_ASSERT_PREFIX = "ov-tag-";
+
 /** Attribute on a component body node marking it as a named text slot. */
 export const SLOT_ATTR = "data-slot";
 

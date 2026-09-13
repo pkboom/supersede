@@ -74,6 +74,16 @@ index path — `ov-at-2-href` targets the root's third element child, `ov-at-0.1
 its first child's second child. Comments are not counted, so a path survives
 someone adding one. Overrides are literal — a revision bump never touches them.
 
+Every `ov-at-` override **requires** a companion `ov-tag-<path>` naming the
+element the path is expected to reach (`ov-tag-2="mj-button"`), and expansion
+throws if it resolves to anything else. An index path points into a revision
+that is designed to change: if a later revision reorders the component's
+interior, the path lands on a different node, mjml's soft validation drops the
+attribute there without an error, and every re-pinned template silently loses
+the override at HTTP 200. The assertion turns that into a loud failure. It does
+not catch two *same-tag* siblings swapping — declared slots are the answer to
+that, and are not built.
+
 Below-root overrides exist because the measurement below demanded them:
 composite components (image + copy + CTA) carry 80–100% of their per-instance
 variance beneath the root, which root-only overrides cannot express.
