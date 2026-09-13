@@ -199,3 +199,67 @@ describe("mjmlErrors is surfaced, not discarded", () => {
     expect((body.mjmlErrors as string[]).length).toBeGreaterThan(0);
   });
 });
+
+describe("malformed and comment-hidden references fail loudly", () => {
+  const footerStore = () => {
+    const s = new InMemoryComponentStore();
+    s.publish("brand/footer", `<mj-text>FOOTERCONTENT</mj-text>`);
+    return s;
+  };
+
+  it("a malformed reference returns 422, not an unhandled 500", async () => {
+    // MalformedTagError originally extended plain Error, so it escaped the
+    // ExpansionError catch and surfaced as an unhandled 500 with a stack trace.
+    const src =
+      `<mjml><mj-body><mj-section><mj-column>` +
+      `<mj-component component-id="brand/footer revision="1" />` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { status } = await render(appWith(footerStore()), src);
+    expect(status).toBe(422);
+  });
+
+  it("an unterminated comment hiding a reference returns 422, not 200", async () => {
+    // Previously: 200, footer content absent, mjmlErrors empty — mjml swallows
+    // everything after an unterminated comment without a diagnostic.
+    const src =
+      `<mjml><mj-body><mj-section><mj-column><mj-text>HEADER</mj-text>` +
+      `<!-- note<mj-component component-id="brand/footer" revision="1" />` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(footerStore()), src);
+    expect(status).toBe(422);
+    expect(body.html ?? "").not.toContain("FOOTERCONTENT");
+  });
+
+  it("a <!-- inside an attribute value does NOT hide the reference", async () => {
+    // Previously: 200 with the content silently missing, because a backward
+    // lastIndexOf("<!--") concluded the reference was commented out.
+    const src =
+      `<mjml><mj-body><mj-section><mj-column><mj-text alt="ok">HEADER</mj-text>` +
+      `<mj-component component-id="brand/footer" revision="1" />` +
+      `</mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(footerStore()), src);
+    expect(status).toBe(200);
+    expect(body.html as string).toContain("FOOTERCONTENT");
+  });
+
+  it("a genuinely commented-out reference renders without it", async () => {
+    const src =
+      `<mjml><mj-body><mj-section><mj-column>` +
+      `<!-- <mj-component component-id="brand/footer" revision="1" /> -->` +
+      `<mj-text>visible</mj-text></mj-column></mj-section></mj-body></mjml>`;
+    const { status, body } = await render(appWith(footerStore()), src);
+    expect(status).toBe(200);
+    expect(body.html as string).toContain("visible");
+    expect(body.html as string).not.toContain("FOOTERCONTENT");
+  });
+
+  it("mjmlErrors do not leak the server filesystem path", async () => {
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-nonsense /></mj-column></mj-section></mj-body></mjml>`;
+    const { body } = await render(appWith(new InMemoryComponentStore()), src);
+    const errors = body.mjmlErrors as string[];
+    expect(errors.length).toBeGreaterThan(0);
+    for (const e of errors) {
+      expect(e).not.toContain(process.cwd());
+    }
+  });
+});

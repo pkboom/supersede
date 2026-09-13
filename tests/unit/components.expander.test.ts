@@ -16,6 +16,8 @@ import {
   ExpansionError,
   UnexpandedReferenceError,
   ComponentNotFoundError,
+  MalformedTagError,
+  UnterminatedCommentError,
   MAX_EXPANSION_DEPTH,
 } from "../../src/shared/components/index.js";
 import type { ComponentStore } from "../../src/shared/components/index.js";
@@ -233,13 +235,50 @@ describe("expand — the throw-on-survivor guard", () => {
     expect(() => expand(src, leakyStore)).toThrow(ExpansionError);
   });
 
-  it("FIRES on a malformed reference the substitution scanner cannot see", () => {
-    // The guard previously used the SAME scanner as substitution, making it a
-    // tautology: anything the scanner could not see was invisible to both. An
-    // unterminated quote is exactly that case, and it reached mjml as a silent
-    // HTTP 200 with the content gone.
+  it("refuses a malformed reference with a typed ExpansionError", () => {
+    // Asserting bare `.toThrow()` hid WHICH error fired. This one is raised by
+    // the scanner during substitution, and it must be an ExpansionError or it
+    // escapes every caller's catch — which produced an unhandled HTTP 500
+    // instead of a 422.
     const src = `<mjml><mj-body><mj-component component-id="a/b revision="1" /></mj-body></mjml>`;
-    expect(() => expand(src, storeWithButton())).toThrow();
+    expect(() => expand(src, storeWithButton())).toThrow(MalformedTagError);
+    expect(() => expand(src, storeWithButton())).toThrow(ExpansionError);
+  });
+
+  it("FIRES the survivor guard on a reference formed only by splicing", () => {
+    // The one input that reaches findSurvivors rather than the substitution
+    // scanner: the body ends mid-tag, and the template text after the reference
+    // completes it. The tag therefore does not exist in either input — only in
+    // the concatenated output — so nothing but the exit guard can catch it.
+    const spliced: ComponentStore = {
+      get: () => ({
+        componentId: "splice/x",
+        revision: 1,
+        body: `<mj-section><mj-text>x</mj-text></mj-section><mj-comp`,
+        publishedAt: new Date(),
+      }),
+      latest: () => undefined,
+      list: () => [],
+    };
+    const src = `<mjml><mj-body><mj-component component-id="splice/x" revision="1" />onent component-id="ghost/y" revision="1" /></mj-body></mjml>`;
+    expect(() => expand(src, spliced)).toThrow(UnexpandedReferenceError);
+  });
+
+  it("refuses an unterminated comment rather than guessing", () => {
+    // Both the substitution scanner and the guard previously used a backward
+    // `lastIndexOf("<!--")`, so an unterminated comment made BOTH treat the
+    // rest of the document as commented out. mjml agrees and swallows it, so
+    // the reference vanished at HTTP 200 with no diagnostic.
+    const src = `<mjml><mj-body><mj-text>H</mj-text><!-- note${REF}</mj-body></mjml>`;
+    expect(() => expand(src, storeWithButton())).toThrow(UnterminatedCommentError);
+  });
+
+  it("does NOT treat a <!-- inside an attribute value as a comment", () => {
+    // A backward search finds this `<!--` and wrongly concludes the reference
+    // that follows is commented out, so it was neither expanded nor reported.
+    const src = `<mjml><mj-body><mj-section><mj-column><mj-text alt="<!--">H</mj-text>${REF}</mj-column></mj-section></mj-body></mjml>`;
+    const { mjml } = expand(src, storeWithButton());
+    expect(mjml).toContain("Shop now");
   });
 
   it("does NOT fire on a reference inside a comment", () => {
@@ -288,10 +327,10 @@ describe("expand — the throw-on-survivor guard", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeDefined();
-    if (caught instanceof UnexpandedReferenceError) {
-      expect(caught.survivors.length).toBeGreaterThan(0);
-    }
+    // Asserted OUTSIDE a conditional. Guarding the assertion on the type meant
+    // the block never ran when a different error fired, leaving `toBeDefined`
+    // as the only live check — a test that could not fail.
+    expect(caught).toBeInstanceOf(ExpansionError);
   });
 
   it("PROVES the failure the guard prevents: mjml drops it at HTTP-200 silently", () => {

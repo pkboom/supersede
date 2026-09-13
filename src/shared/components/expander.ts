@@ -42,8 +42,10 @@ import {
   type ExpansionResult,
 } from "./types.js";
 import {
+  commentRanges,
   findElementEnd,
   findTag,
+  isInRanges,
   readRootTag,
   renderOpenTag,
   type ScannedAttr,
@@ -72,26 +74,27 @@ import {
 function findSurvivors(src: string): number[] {
   const out: number[] = [];
   const needle = `<${COMPONENT_TAG}`;
+  // Throws on an unterminated comment, which is the correct outcome: mjml
+  // swallows everything after one, so a reference inside would vanish from the
+  // output with no diagnostic anywhere. An earlier version used a backward
+  // `lastIndexOf("<!--")` here and in the substitution scanner, and BOTH were
+  // fooled by the same two inputs — a `<!--` inside an attribute value, and an
+  // unterminated comment — so a reference sailed through to HTTP 200 with the
+  // content missing. That is the exact failure this guard exists to prevent.
+  const comments = commentRanges(src);
   let at = src.indexOf(needle);
 
   while (at !== -1) {
     const after = src[at + needle.length];
     const isTagStart = after === undefined || !/[\w-]/.test(after);
 
-    // Skip references inside XML comments. This is the ONE exclusion the guard
-    // makes, and it is safe because a commented-out reference loses no content:
-    // mjml never renders it, so the silent-content-loss failure this guard
-    // exists to prevent cannot occur. The check uses its own trivial comment
-    // scan rather than the substitution scanner, so the guard stays independent
-    // on the dimension that actually matters — tag well-formedness.
-    let inComment = false;
-    const commentStart = src.lastIndexOf("<!--", at);
-    if (commentStart !== -1) {
-      const commentEnd = src.indexOf("-->", commentStart);
-      inComment = commentEnd === -1 || commentEnd > at;
-    }
-
-    if (isTagStart && !inComment) out.push(at);
+    // A commented-out reference loses no content — mjml never renders it — so
+    // it is not a survivor. This is the guard's ONE exclusion, and it is safe
+    // to share `commentRanges` with the substitution scanner because that
+    // function is total: it returns unambiguous ranges or throws. The
+    // independence that matters is over tag WELL-FORMEDNESS, where this scan
+    // remains deliberately more permissive than `findTag`.
+    if (isTagStart && !isInRanges(comments, at)) out.push(at);
     at = src.indexOf(needle, at + 1);
   }
   return out;

@@ -182,16 +182,22 @@ export function createRenderRoutes(opts: RenderRouteOptions = {}): Hono {
       // mjml reports "Element mj-component doesn't exist" in here, under soft
       // validation, and this route used to reach the field by type assertion
       // and never look at it.
-      const mjmlErrors = (result.errors ?? []).map((e) =>
-        typeof e === "string"
-          ? e
-          : String(
-              (e as { formattedMessage?: string; message?: string })
-                ?.formattedMessage ??
-                (e as { message?: string })?.message ??
-                e
-            )
-      );
+      const mjmlErrors = (result.errors ?? []).map((e) => {
+        const raw =
+          typeof e === "string"
+            ? e
+            : String(
+                (e as { formattedMessage?: string; message?: string })
+                  ?.formattedMessage ??
+                  (e as { message?: string })?.message ??
+                  e
+              );
+        // mjml embeds the process CWD in its messages ("Line 1 of /abs/path
+        // (mj-text) — ..."). These now reach the client, so strip the path:
+        // the line number and element are the useful part, the server's
+        // filesystem layout is not.
+        return raw.replace(/^Line (\d+) of \S+ /, "Line $1 ");
+      });
 
       setCached(expanded, stamped.html, stamped.missing, mjmlErrors);
       return c.json({
