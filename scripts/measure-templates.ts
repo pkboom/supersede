@@ -72,11 +72,27 @@ function collectFiles(args: string[]): string[] {
       continue;
     }
     if (st.isDirectory()) {
-      for (const f of readdirSync(a)) {
-        if ([".mjml", ".html", ".txt"].includes(extname(f).toLowerCase())) {
-          out.push(join(a, f));
+      // Recurse: real template corpora are organised into subdirectories by
+      // lifecycle stage or brand, so a single-level scan silently measures
+      // nothing and prints the usage text as if the arguments were wrong.
+      const walkDir = (dir: string): void => {
+        for (const f of readdirSync(dir)) {
+          const full = join(dir, f);
+          let s2;
+          try {
+            s2 = statSync(full);
+          } catch {
+            continue;
+          }
+          if (s2.isDirectory()) {
+            if (f === "node_modules" || f === ".git") continue;
+            walkDir(full);
+          } else if (extname(f).toLowerCase() === ".mjml") {
+            out.push(full);
+          }
         }
-      }
+      };
+      walkDir(a);
     } else {
       out.push(a);
     }
