@@ -102,6 +102,17 @@ const BUTTON_V1 =
   `background-color="#1f6feb" color="#ffffff" border-radius="4px" ` +
   `font-size="16px" padding="12px 24px">Shop now</mj-button>`;
 
+/**
+ * A composite component — image + copy + CTA. Experiment (b) measured exactly
+ * this shape at mean 14.20 differing attributes with 100% of them below the
+ * root, which is why below-root overrides exist.
+ */
+const CARD_V1 =
+  `<mj-column><mj-image src="https://cdn.shoe.test/hero.png" alt="Product" />` +
+  `<mj-text font-size="16px">Our best seller</mj-text>` +
+  `<mj-button href="https://shoe.test/p/default" background-color="#1f6feb">Buy</mj-button>` +
+  `</mj-column>`;
+
 /** The rebrand: a new brand colour and a rounder corner. */
 const BUTTON_V2 =
   `<mj-button href="https://shoe.test/shop?utm_source=email&amp;utm_medium=cta" ` +
@@ -141,9 +152,12 @@ function makeTemplates(revision: number): Array<{ name: string; mjml: string }> 
   ];
 }
 
+const CARD_ID = "shoe-brand/product-card";
+
 function buildStore(): InMemoryComponentStore {
   const store = new InMemoryComponentStore();
   store.publish(COMPONENT_ID, BUTTON_V1, { label: "Primary button" });
+  store.publish(CARD_ID, CARD_V1, { label: "Product card" });
   return store;
 }
 
@@ -349,16 +363,48 @@ function cmdDemo(): void {
   cmdExport();
   cmdReport();
 
+  heading("Below-root overrides — what experiment (b) forced");
+  console.log(
+    c.dim(
+      "Measured over 39 real templates: composite shapes (image + copy + CTA)\n" +
+        "carry 80-100% of their variance BELOW the root. Root-only overrides\n" +
+        "cannot express that, so detach would have become the routine path."
+    )
+  );
+  {
+    const src =
+      `<mjml><mj-body><mj-section>` +
+      `<mj-component component-id="${CARD_ID}" revision="1" ` +
+      `ov-at-0-alt="Running shoe, side view" ` +
+      `ov-at-2-href="https://shoe.test/p/nimbus-24" ` +
+      `ov-padding="12px" />` +
+      `</mj-section></mj-body></mjml>`;
+    const { mjml, regions } = expand(src, store);
+    const line = (re: RegExp) => (mjml.match(re) ?? [""])[0];
+    console.log(`  ${c.green("✓")} nested CTA  ${c.dim(line(/<mj-button[^>]*>/) || "")}`);
+    console.log(`  ${c.green("✓")} nested image ${c.dim(line(/<mj-image[^>]*>/) || "")}`);
+    console.log(
+      `  ${c.green("✓")} bindings recorded: ${c.dim([...regions[0]!.overridable.keys()].join(", "))}`
+    );
+    console.log(
+      c.dim(
+        "\n  Still inside the reference model: an override is a literal attribute\n" +
+          "  propagation never touches. No merge, no base, no conflicts, and the\n" +
+          "  blast radius of a bump is still one attribute value per template."
+      )
+    );
+  }
+
   heading("What this slice does NOT do");
   console.log(
     c.dim(
       "  · No UI, no brands table, no API scoping, no auth — all deferred (§12).\n" +
-        "  · ov-* reaches the component ROOT and named text slots only. If real\n" +
-        "    templates need below-root overrides (a nested CTA's href), flat ov-*\n" +
-        "    cannot express it and detach becomes the routine path.\n" +
-        "  · §11 experiment (b) HAS NOT BEEN RUN. It needs ten real agency\n" +
-        "    templates and it GATES the reference model itself. Until it runs,\n" +
-        "    treat the override surface as provisional."
+        "  · §11 experiment (b) has now been run against 39 real public templates\n" +
+        "    (`npm run measure`), not against one agency's brand corpus. It came\n" +
+        "    back at mean 3.48 differing attributes with 38% below the root, which\n" +
+        "    is why below-root overrides exist. Re-run it on a REAL brand corpus\n" +
+        "    before treating the override surface as settled — a consistent brand\n" +
+        "    should measure lower than a gallery of varied showcases."
     )
   );
 }

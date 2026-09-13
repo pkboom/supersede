@@ -36,6 +36,34 @@ export const OVERRIDE_PREFIX = "ov-";
 /** Override prefix that targets a named slot's TEXT content rather than an attr. */
 export const SLOT_PREFIX = "ov-slot-";
 
+/**
+ * Override prefix that targets an attribute on a node BELOW the component root,
+ * by index path: `ov-at-0.2-href="..."` sets `href` on the third element child
+ * of the first element child.
+ *
+ * **Added because the measurement said root-only was not enough.** §11 scoped
+ * `ov-*` to flat root-level targets and predicted the failure — "a product card
+ * can have its padding but not its CTA" — but left it out of scope. Running
+ * experiment (b) over 39 real templates showed that prediction is what actually
+ * happens, and that it gets worse the more a shape resembles a real component:
+ *
+ *     mj-column[mj-image,mj-text,mj-button]  n=10  mean=14.20  below-root=100%
+ *     mj-column[mj-text,mj-text,mj-button]   n= 8  mean= 9.12  below-root= 97%
+ *     mj-section[mj-column,mj-column]        n=46  mean= 6.83  below-root= 82%
+ *
+ * Leaf shapes are trivially 0% below-root and stay low. The composite shapes —
+ * a product card, a CTA block, a footer — carry nearly all their variance below
+ * the root, which flat overrides cannot express at all. Without this, `detach`
+ * becomes the routine path rather than an escape hatch: the copy model reached
+ * by attrition, through a one-way door.
+ *
+ * This stays inside the reference model. An override is still a literal
+ * attribute that propagation never touches, there is still no merge, no base
+ * and no conflict — the blast radius of a revision bump is still one attribute
+ * value per template.
+ */
+export const PATH_PREFIX = "ov-at-";
+
 /** Attribute on a component body node marking it as a named text slot. */
 export const SLOT_ATTR = "data-slot";
 

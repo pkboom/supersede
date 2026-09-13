@@ -727,3 +727,109 @@ describe("the unterminated-comment rejection is scoped to references it could hi
     expect(() => expand(src, store())).toThrow(UnterminatedCommentError);
   });
 });
+
+describe("below-root overrides (ov-at-<path>-<attr>)", () => {
+  // Added because experiment (b) over 39 real templates showed root-only
+  // overrides cannot express what real components need. The composite shapes —
+  // a product card, a CTA block — carry 80-100% of their variance BELOW the
+  // root. Without this, detach becomes the routine path.
+  const card = () => {
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/card",
+      `<mj-column><mj-image src="/a.png" /><mj-text>Copy</mj-text><mj-button href="https://default.test">Go</mj-button></mj-column>`
+    );
+    return s;
+  };
+  const tpl = (ov: string) =>
+    `<mjml><mj-body><mj-section><mj-component component-id="brand/card" revision="1"${ov} /></mj-section></mj-body></mjml>`;
+
+  it("overrides a nested CTA's href — the case §11 predicted would fail", () => {
+    const { mjml } = expand(tpl(` ov-at-2-href="https://custom.test"`), card());
+    expect(mjml).toContain(`href="https://custom.test"`);
+    expect(mjml).not.toContain("https://default.test");
+  });
+
+  it("leaves sibling nodes untouched", () => {
+    const { mjml } = expand(tpl(` ov-at-2-href="https://custom.test"`), card());
+    expect(mjml).toContain(`src="/a.png"`);
+    expect(mjml).toContain("Copy");
+  });
+
+  it("adds an attribute the nested node did not have", () => {
+    const { mjml } = expand(tpl(` ov-at-0-alt="Product photo"`), card());
+    expect(mjml).toContain(`alt="Product photo"`);
+  });
+
+  it("applies several overrides to different depths at once", () => {
+    const { mjml } = expand(
+      tpl(` ov-at-0-alt="Photo" ov-at-2-href="https://x.test" ov-padding="4px"`),
+      card()
+    );
+    expect(mjml).toContain(`alt="Photo"`);
+    expect(mjml).toContain(`href="https://x.test"`);
+    expect(mjml).toContain(`padding="4px"`);
+  });
+
+  it("resolves a multi-segment path", () => {
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/wrap",
+      `<mj-section><mj-column><mj-button href="https://default.test">Go</mj-button></mj-column></mj-section>`
+    );
+    const src = `<mjml><mj-body><mj-component component-id="brand/wrap" revision="1" ov-at-0.0-href="https://deep.test" /></mj-body></mjml>`;
+    expect(expand(src, s).mjml).toContain(`href="https://deep.test"`);
+  });
+
+  it("does not count comments as children, so paths survive a comment", () => {
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/c",
+      `<mj-column><!-- a note --><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button></mj-column>`
+    );
+    const src = `<mjml><mj-body><mj-section><mj-component component-id="brand/c" revision="1" ov-at-1-href="https://custom.test" /></mj-section></mj-body></mjml>`;
+    expect(expand(src, s).mjml).toContain(`href="https://custom.test"`);
+  });
+
+  it("records the binding in the region's overridable map", () => {
+    const { regions } = expand(tpl(` ov-at-2-href="https://x.test"`), card());
+    expect(regions[0]!.overridable.get("ov-at-2-href")).toBe("2");
+  });
+
+  it("throws when the path does not resolve", () => {
+    expect(() => expand(tpl(` ov-at-9-href="https://x.test"`), card())).toThrow(
+      /no element at path 9/
+    );
+  });
+
+  it("rejects a malformed path", () => {
+    expect(() => expand(tpl(` ov-at-abc-href="https://x.test"`), card())).toThrow(
+      /Malformed path/
+    );
+  });
+
+  it("rejects a path override with no attribute", () => {
+    expect(() => expand(tpl(` ov-at-2="x"`), card())).toThrow(/Malformed path override/);
+  });
+
+  it("escapes a quote in a path override value, like the root path does", () => {
+    const { mjml } = expand(tpl(` ov-at-2-alt='say "hi"'`), card());
+    expect(mjml).toContain("&quot;hi&quot;");
+  });
+
+  it("keeps the expansion idempotent and compilable", () => {
+    const store = card();
+    const src = tpl(` ov-at-2-href="https://x.test/?a=1&amp;b=2"`);
+    const first = expand(src, store).mjml;
+    expect(expand(src, store).mjml).toBe(first);
+    expect(first).not.toContain("&amp;amp;");
+    const res = mjml2html(first, { validationLevel: "soft" }) as { errors?: unknown[] };
+    expect(res.errors ?? []).toHaveLength(0);
+  });
+
+  it("does not change the stored template — blast radius is still the pin", () => {
+    const src = tpl(` ov-at-2-href="https://x.test"`);
+    expand(src, card());
+    expect(src).toContain(`revision="1"`);
+  });
+});

@@ -436,3 +436,73 @@ export function findElementEnd(src: string, open: ScannedTag): number | null {
     if (depth === 0) return cursor;
   }
 }
+
+/**
+ * Locate the element at an index path of ELEMENT children, e.g. [0, 2] is the
+ * third element child of the first element child.
+ *
+ * Comments and text nodes are not counted, so a path stays stable when someone
+ * adds a comment to a component body — which is the whole reason a path-based
+ * override is usable at all.
+ *
+ * Returns null when the path does not resolve, so the caller can raise an error
+ * naming the component and the path rather than silently not applying an
+ * override the author asked for.
+ */
+export function findElementAtPath(
+  src: string,
+  path: number[],
+  comments?: Range[]
+): ScannedTag | null {
+  const spans = comments ?? commentRanges(src);
+
+  // Children of the element currently being descended into.
+  let scopeStart = 0;
+  let scopeEnd = src.length;
+  let current: ScannedTag | null = null;
+
+  for (const wanted of path) {
+    let idx = -1;
+    let cursor = scopeStart;
+    let found: ScannedTag | null = null;
+
+    while (cursor < scopeEnd) {
+      const lt = src.indexOf("<", cursor);
+      if (lt === -1 || lt >= scopeEnd) break;
+      if (isInRanges(spans, lt) || src.startsWith("<!--", lt) || src.startsWith("</", lt)) {
+        cursor = lt + 1;
+        continue;
+      }
+      const m = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(lt));
+      if (!m) {
+        cursor = lt + 1;
+        continue;
+      }
+      let tag: ScannedTag | null;
+      try {
+        tag = findTag(src, m[1]!, lt, spans);
+      } catch {
+        return null; // malformed; the survivor guard reports the real problem
+      }
+      if (!tag || tag.start !== lt) {
+        cursor = lt + 1;
+        continue;
+      }
+      idx++;
+      if (idx === wanted) {
+        found = tag;
+        break;
+      }
+      const end = findElementEnd(src, tag);
+      cursor = end === null ? tag.end : end;
+    }
+
+    if (!found) return null;
+    current = found;
+    scopeStart = found.end;
+    const e = findElementEnd(src, found);
+    scopeEnd = e === null ? src.length : e;
+  }
+
+  return current;
+}

@@ -32,6 +32,7 @@ import {
   MAX_EXPANDED_BYTES,
   MAX_EXPANSION_DEPTH,
   OVERRIDE_PREFIX,
+  PATH_PREFIX,
   SLOT_ATTR,
   SLOT_PREFIX,
   ComponentNotFoundError,
@@ -42,6 +43,7 @@ import {
   type ExpansionResult,
 } from "./types.js";
 import {
+  findElementAtPath,
   findElementEnd,
   findTag,
   isInRanges,
@@ -195,9 +197,31 @@ function applyOverrides(
 
   const attrOverrides = new Map<string, string>();
   const slotOverrides = new Map<string, string>();
+  /** path string -> (attr -> value) */
+  const pathOverrides = new Map<string, Map<string, string>>();
 
   for (const [key, value] of overrides) {
-    if (key.startsWith(SLOT_PREFIX)) {
+    if (key.startsWith(PATH_PREFIX)) {
+      // `ov-at-<path>-<attr>`; the path is digits and dots, so the FIRST `-`
+      // after it separates path from attribute name. That keeps attribute
+      // names containing dashes (background-color) unambiguous.
+      const rest = key.slice(PATH_PREFIX.length);
+      const dash = rest.indexOf("-");
+      if (dash <= 0) {
+        throw new ExpansionError(
+          `Malformed path override "${key}" on "${componentId}": expected ${PATH_PREFIX}<path>-<attr>, e.g. ${PATH_PREFIX}0.2-href`
+        );
+      }
+      const pathStr = rest.slice(0, dash);
+      const attr = rest.slice(dash + 1);
+      if (!/^\d+(\.\d+)*$/.test(pathStr)) {
+        throw new ExpansionError(
+          `Malformed path "${pathStr}" in override "${key}" on "${componentId}": expected dot-separated child indices, e.g. 0.2`
+        );
+      }
+      if (!pathOverrides.has(pathStr)) pathOverrides.set(pathStr, new Map());
+      pathOverrides.get(pathStr)!.set(attr, value);
+    } else if (key.startsWith(SLOT_PREFIX)) {
       slotOverrides.set(key.slice(SLOT_PREFIX.length), value);
     } else if (key.startsWith(OVERRIDE_PREFIX)) {
       attrOverrides.set(key.slice(OVERRIDE_PREFIX.length), value);
@@ -232,6 +256,40 @@ function applyOverrides(
       out.slice(0, root.start) +
       renderOpenTag(root.name, attrs, root.selfClosing) +
       out.slice(root.end);
+  }
+
+  // --- below-root attribute overrides, by index path ---
+  //
+  // Applied DEEPEST-FIRST so that rewriting one element's open tag cannot
+  // invalidate the offsets of another override still to be applied. Rewriting
+  // a shallower element first would shift every offset inside it.
+  const paths = [...pathOverrides.keys()].sort(
+    (a, b) => b.split(".").length - a.split(".").length || b.localeCompare(a)
+  );
+  for (const pathStr of paths) {
+    // Paths are relative to the ROOT'S CHILDREN, which is the natural reading
+    // of "below the root": `ov-at-2-href` targets the root's third element
+    // child. The single-root invariant makes the root itself index 0 at
+    // document level, so prepending 0 turns a root-relative path into an
+    // absolute one without a second traversal mode.
+    const indices = [0, ...pathStr.split(".").map(Number)];
+    const target = findElementAtPath(out, indices);
+    if (!target) {
+      throw new ExpansionError(
+        `Component "${componentId}" has no element at path ${pathStr} for override ${PATH_PREFIX}${pathStr}-*`
+      );
+    }
+    const attrs: ScannedAttr[] = [...target.attrs];
+    for (const [name, value] of pathOverrides.get(pathStr)!) {
+      const existing = attrs.findIndex((a) => a.name === name);
+      if (existing >= 0) attrs[existing] = { name, value };
+      else attrs.push({ name, value });
+      overridable.set(`${PATH_PREFIX}${pathStr}-${name}`, pathStr);
+    }
+    out =
+      out.slice(0, target.start) +
+      renderOpenTag(target.name, attrs, target.selfClosing) +
+      out.slice(target.end);
   }
 
   // --- named slot text overrides ---

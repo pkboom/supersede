@@ -68,8 +68,15 @@ Per-instance overrides are attributes on the reference tag:
 ```
 
 `ov-<attr>` sets an attribute on the component's root element; `ov-slot-<name>`
-replaces the text of the element carrying `data-slot="<name>"`. Overrides are
-literal — a revision bump never touches them.
+replaces the text of the element carrying `data-slot="<name>"`; and
+`ov-at-<path>-<attr>` sets an attribute on a node *below* the root, addressed by
+index path — `ov-at-2-href` targets the root's third element child, `ov-at-0.1-src`
+its first child's second child. Comments are not counted, so a path survives
+someone adding one. Overrides are literal — a revision bump never touches them.
+
+Below-root overrides exist because the measurement below demanded them:
+composite components (image + copy + CTA) carry 80–100% of their per-instance
+variance beneath the root, which root-only overrides cannot express.
 
 Try it in the terminal (no UI yet):
 
