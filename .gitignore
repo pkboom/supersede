@@ -16,9 +16,6 @@ web/dist/
 # SQLite data dir (per-deploy persistent disk; never committed).
 data/
 
-# Drizzle migration metadata (kept out of VCS; SQL files in drizzle/migrations/ ARE committed).
-drizzle/migrations/meta/
-
 # OS junk
 .DS_Store
 Thumbs.db

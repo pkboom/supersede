@@ -1,7 +1,7 @@
 CREATE TABLE `settings` (
 	`id` integer PRIMARY KEY DEFAULT 1 NOT NULL,
 	`default_provider` text DEFAULT 'anthropic' NOT NULL,
-	`default_mode` text DEFAULT 'api' NOT NULL,
+	`default_mode` text DEFAULT 'cli' NOT NULL,
 	`default_model` text DEFAULT 'claude-opus-4-7' NOT NULL,
 	`updated_at` integer NOT NULL
 );

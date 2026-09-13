@@ -14,18 +14,35 @@ import type {
 } from "./types.js";
 import { BLOCK_REGISTRY } from "./registry.js";
 
+/**
+ * Escape an attribute value for emission.
+ *
+ * **Only `"` is escaped, deliberately (plan §0.2).** The parser runs
+ * fast-xml-parser with `processEntities: false`, so a value arrives holding the
+ * LITERAL SOURCE CHARACTERS — source `&amp;` is five characters in the Map, not
+ * one `&`. Re-escaping `&` here therefore had no inverse anywhere and compounded
+ * once per save, +4 characters per generation, forever:
+ *
+ *     gen 0: href="/x?a=1&amp;b=2"
+ *     gen 1: href="/x?a=1&amp;amp;b=2"
+ *     gen 2: href="/x?a=1&amp;amp;amp;b=2"
+ *
+ * The trigger was every UTM tracking URL and every `&` in body copy. Because
+ * values round-trip as source text, emitting them unchanged is what makes
+ * parse->serialize reach a fixpoint.
+ *
+ * `"` IS still escaped, and must be: a value set programmatically (e.g. by the
+ * properties form or the component expander) can legitimately contain a literal
+ * quote, which would otherwise terminate the attribute and produce invalid MJML.
+ * That escape is idempotent in practice because a value parsed from source
+ * carries `&quot;`, never a bare `"`.
+ *
+ * NOT to be unified with `escapeHtml` in `headEdit.ts:59-61`, which
+ * double-escapes DELIBERATELY under a different contract and is asserted at
+ * `blocks.headEdit.test.ts:70`. Identical-looking code, opposite requirement.
+ */
 function escapeAttrValue(v: string): string {
-  return v
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
-}
-
-function escapeText(v: string): string {
-  return v
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return v.replace(/"/g, "&quot;");
 }
 
 function indent(level: number): string {
@@ -63,7 +80,10 @@ function serializeBlock(node: BlockNode, level: number): string {
 
   // Leaf with text content
   if (def.contentField === "text" && node.text != null) {
-    return `${ind}<${node.type}${attrsStr}>${escapeText(node.text)}</${node.type}>`;
+    // Text is NOT escaped — see escapeAttrValue's note. `node.text` holds the
+    // literal source slice (processEntities:false), so re-escaping `&` here was
+    // the text-content half of the same compounding corruption.
+    return `${ind}<${node.type}${attrsStr}>${node.text}</${node.type}>`;
   }
 
   // Leaf without text

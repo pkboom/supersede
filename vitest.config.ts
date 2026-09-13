@@ -29,6 +29,11 @@ export default defineConfig({
     },
   },
   test: {
+    // Collect ONLY the real suite. Without an explicit `include`, Vitest's
+    // default glob sweeps the whole repo and picks up throwaway probe files
+    // (e.g. `.plan/scratch/*.test.ts`), so the reported pass rate depends on
+    // whatever scratch work happens to be lying around. Phase 0 (§0.1).
+    include: ["tests/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
     // Default to node; per-file `// @vitest-environment jsdom` overrides for
     // web component tests.
     environment: "node",
