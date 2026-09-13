@@ -1,27 +1,32 @@
 # Next
 
-Plan: `ideas/PLAN-design-system.md` (2,106 lines, committed `f231f1e`).
+Plan: `ideas/PLAN-design-system.md` (2,125 lines, committed `855f3cd`).
 
-Closed since the last pass: the drizzle journal hazard (`tag: "0000_initial"`,
-`when: 1700000000000` — restored, so a database that already ran `0000` will not re-run it),
-and `phase0-foundation`, which is fully merged into master.
+Closed since the last pass: the drizzle journal hazard (`when: 1700000000000` restored — drizzle
+keys re-runs on `folderMillis`, not the tag, so preserving that value is what stops a database
+that already ran `0000` from re-running it); `phase0-foundation`, fully merged into master; the
+tag-mismatch guard below; and the two flags that used to sit at the bottom of this file (master is
+pushed and in sync, `.plan/` design records are committed with their supersessions marked).
 
-## 1. Tag-mismatch guard on `ov-at-<path>-<attr>` — open code defect
+## 1. Same-tag sibling swap — the part the guard does NOT catch
 
-The only defect the measurement created, and it is not mitigated anywhere.
+The previous item here (nothing stores or checks the expected tag) is **FIXED** in `855f3cd`.
+Every `ov-at-<path>-<attr>` now requires a companion `ov-tag-<path>="mj-button"` and expansion
+throws on mismatch — required rather than optional, because an opt-in guard on a silent-corruption
+path is documentation, not a guard. An assertion with no matching override also throws, so a stale
+guard cannot sit in a template looking like protection it no longer provides.
 
-- `src/shared/components/types.ts:65` defines `PATH_PREFIX`
-- `src/shared/components/expander.ts:205` parses the path
-- **Nothing stores or checks the expected tag.**
+**What remains open is narrower and should not be written up as if it were the same problem.** Two
+siblings with the *same tag* swapping places still resolves to the wrong one: `ov-at-2-href`
+asserted as `mj-button` applies happily to the other `mj-button`. Renders 200, wrong link.
 
-Excluding comments from the path protects against someone adding a comment. It does **not**
-protect against r5 rearranging the component interior, after which `ov-at-2-href` silently
-resolves to a different node — the exact drift the reference model was chosen to eliminate,
-arriving through the override mechanism.
+This is genuinely less urgent than the original hole — reordering two buttons inside one component
+is rarer than reordering a button past a text block, and it needs a same-tag pair to exist at all.
+It is listed because the fix above narrowed the failure without closing the class, and an
+unrecorded residual becomes a claim that the class was closed.
 
-**Minimum fix, cheaper than retrofitting declared slots:** store the expected tag alongside the
-path and throw at expansion when it no longer matches. Failing loudly at expansion is the whole
-point; a wrong-node override renders 200 with the wrong content.
+Declared slots (§11) are the real answer and are not built. Do not reach for a second positional
+mechanism to patch a positional mechanism.
 
 ## 2. Measure one real brand corpus
 
@@ -43,9 +48,20 @@ Read for the modular-reuse complaint. §1 is a **contested bet**, not a settled 
 calls this "the only step that de-risks" it; the research wiki flags it twice as the one demand
 source never reached. Cheapest item on this list, and it gates the most.
 
+## 4. Browser check on the expander changes — developer task
+
+`render.ts` and the expander both changed after the last UI verification (below-root overrides,
+then the tag assertion). Canvas click-selection depends on `stampMjmlPaths` and `mjml2html`
+receiving the *same* expanded string; nothing in the suite covers the overlay. Per project
+CLAUDE.md this is a developer test, so it is listed here rather than done.
+
 ## Flags, not tasks
 
-- **master is 18 commits ahead of origin, unpushed.** Deliberate or not is your call.
+- **`ideas/PLAN-design-system.md:1984` now contradicts the corrected §11.** The §12 table still
+  reads "Above ~3 average, `ov-*` degenerates into the copy model and **D-2 re-opens**", which is
+  the claim §11 was explicitly corrected to reject. Experiment (b) came back at 3.48, so that row
+  currently instructs a reader to re-open a decision the plan elsewhere says stays closed. The §11
+  correction is right; the table row was missed.
 - **§12's gate above the gate still stands:** nothing in §7–§8 — brand scoping, auth, the API
   refactor, the largest block of work in the plan — before one real agency has touched the
   component model at all. Phase 0 landing does not open it. The brand-scoping refactor serves a
