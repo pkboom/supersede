@@ -1,7 +1,7 @@
 /**
  * /api/render — server-side MJML compile.
  *
- * Body: { source: string } → { html: string }.
+ * Body: { source: string } → { html: string, unstamped: string[] }.
  * Cached in-memory by source string with a small LRU (cap 32). Caller is
  * expected to debounce client-side (PreviewPane debounces 200ms).
  */
@@ -14,23 +14,29 @@ import { stampMjmlPaths } from "../../shared/blocks/stampPaths.js";
 interface CacheEntry {
   source: string;
   html: string;
+  /**
+   * Path keys whose detector found no matching rendered element, so the canvas
+   * cannot make them selectable. Cached alongside the HTML because it is a
+   * property of this render, not of this request.
+   */
+  unstamped: string[];
   ts: number;
 }
 
 const CACHE_CAP = 32;
 const cache: CacheEntry[] = [];
 
-function getCached(source: string): string | null {
+function getCached(source: string): CacheEntry | null {
   const idx = cache.findIndex((e) => e.source === source);
   if (idx === -1) return null;
   // Touch to LRU-front.
   const e = cache.splice(idx, 1)[0]!;
   cache.unshift(e);
-  return e.html;
+  return e;
 }
 
-function setCached(source: string, html: string): void {
-  cache.unshift({ source, html, ts: Date.now() });
+function setCached(source: string, html: string, unstamped: string[]): void {
+  cache.unshift({ source, html, unstamped, ts: Date.now() });
   while (cache.length > CACHE_CAP) cache.pop();
 }
 
@@ -53,7 +59,7 @@ export function createRenderRoutes(): Hono {
 
     const cached = getCached(source);
     if (cached !== null) {
-      return c.json({ html: cached });
+      return c.json({ html: cached.html, unstamped: cached.unstamped });
     }
 
     try {
@@ -73,8 +79,20 @@ export function createRenderRoutes(): Hono {
           `[stampMjmlPaths] ${stamped.stamped}/${stamped.expected} stamped, missing: [${stamped.missing.join(",")}]`
         );
       }
-      setCached(source, stamped.html);
-      return c.json({ html: stamped.html });
+      // Return `unstamped` rather than spending it on a console.warn (§0.5).
+      // The browser was previously not merely un-warned but STRUCTURALLY BLIND:
+      // it had no way to know which blocks are unselectable, so the failure
+      // surfaced as "selection mysteriously stopped working", reported weeks
+      // later, by a user.
+      //
+      // Know its limit: this is a COMPLETENESS check, not a correctness one. It
+      // cannot catch mis-targeting that still counts stamped === expected (see
+      // §11) — that needs the structural fix of stamping the same string that
+      // was compiled. It is still worth returning, for the registry-gap class
+      // and as the smoke alarm for the deferred mjml 4->5 bump (§0.4), whose
+      // most likely casualty is exactly this code path.
+      setCached(source, stamped.html, stamped.missing);
+      return c.json({ html: stamped.html, unstamped: stamped.missing });
     } catch (err) {
       c.status(500);
       return c.json({ error: `MJML compile failed: ${(err as Error).message}` });

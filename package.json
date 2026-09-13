@@ -2,7 +2,7 @@
   "name": "email-designer",
   "version": "0.0.1",
   "private": true,
-  "description": "Hosted multi-tenant MJML email designer with Anthropic-API-driven Claude turns.",
+  "description": "Local single-user MJML email designer with Anthropic-API-driven Claude turns.",
   "type": "module",
   "engines": {
     "node": ">=20"

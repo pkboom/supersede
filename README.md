@@ -9,7 +9,7 @@ This app runs the `claude` CLI with `--dangerously-skip-permissions`. Within the
 - The `claude` subprocess runs with `--dangerously-skip-permissions` inside `./workspace/`, which **persists across runs**. Anything written there during a Claude turn — including pasted text, intermediate edits, or shell-command output — stays on disk until you delete it. This is a deliberate trade-off vs. the per-session tmpdir an earlier CLI shape used; for a personal app the persistence wins, but it means you should not paste secrets into prompts and should periodically prune `./workspace/exports/`.
 - **Do not paste secrets, credentials, or API keys into prompts** — they live on disk in `./workspace/` indefinitely.
 - **Do not run on untrusted prompts or shared machines.**
-- The local server binds to `127.0.0.1` and rejects requests whose `Host`/`Origin` headers don't match the bound port (DNS-rebinding / CSRF defence). It still relies on the operating system's loopback isolation.
+- The local server binds to `127.0.0.1` and rejects any request whose `Host` header is not a loopback name (`localhost`, `127.0.0.1`, `[::1]`), and any request carrying a non-loopback `Origin` (DNS-rebinding / CSRF defence, `src/server/middleware/originGuard.ts`). The check is on hostname, not port: the hostname is the security boundary, and the server cannot know the dialled port when it sits behind the Vite dev proxy. It applies to reads as well as writes, because exfiltrating templates over `GET` is the interesting attack. It still relies on the operating system's loopback isolation.
 
 ### Resetting
 

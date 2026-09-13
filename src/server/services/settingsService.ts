@@ -41,9 +41,27 @@ export class UnknownModeError extends Error {
 export class SettingsService {
   constructor(private readonly db: DbHandle) {}
 
+  /**
+   * Read the singleton, lazily creating it on first access.
+   *
+   * The lazy INSERT sits on a READ path, which is a latent defect worth being
+   * explicit about (plan §0.6): two concurrent GETs could both miss the SELECT
+   * and both attempt the INSERT, raising a primary-key violation out of a
+   * plain read. Unreachable at one user; reachable at five.
+   *
+   * `onConflictDoNothing` makes the seed idempotent, and we re-read afterwards
+   * rather than trusting the value we tried to write — so the loser of a race
+   * returns the winner's row instead of a row that was never persisted.
+   */
   get(): SettingsRow {
-    const row = this.db.select().from(settings).where(eq(settings.id, SINGLETON_ID)).limit(1).get();
-    if (row) return row;
+    const existing = this.db
+      .select()
+      .from(settings)
+      .where(eq(settings.id, SINGLETON_ID))
+      .limit(1)
+      .get();
+    if (existing) return existing;
+
     const seeded: SettingsRow = {
       id: SINGLETON_ID,
       defaultProvider: DEFAULT_PROVIDER,
@@ -51,8 +69,18 @@ export class SettingsService {
       defaultModel: DEFAULT_MODEL,
       updatedAt: new Date(),
     };
-    this.db.insert(settings).values(seeded).run();
-    return seeded;
+    this.db.insert(settings).values(seeded).onConflictDoNothing().run();
+
+    const row = this.db
+      .select()
+      .from(settings)
+      .where(eq(settings.id, SINGLETON_ID))
+      .limit(1)
+      .get();
+    // The re-read can only miss if the row was deleted between our INSERT and
+    // this SELECT, which nothing in the app does; fall back to the seed rather
+    // than throwing out of a read path.
+    return row ?? seeded;
   }
 
   update(patch: { defaultModel?: string; defaultMode?: string }): SettingsRow {

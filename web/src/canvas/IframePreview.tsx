@@ -270,6 +270,21 @@ const BOOTSTRAP_SCRIPT = `
 interface RenderResponse {
   html?: string;
   error?: string;
+  /**
+   * Path keys the stamper could not match to a rendered element, so the canvas
+   * cannot make those blocks selectable (plan §0.5). Previously the server
+   * spent this on a `console.warn` and discarded it, which left the browser
+   * structurally blind — it could not know that blocks were unselectable, so
+   * the failure surfaced as "selection mysteriously stopped working".
+   *
+   * Surfacing this in the canvas UI is deferred with the rest of §8; the field
+   * is returned now so the affordance has data to render, and so the deferred
+   * mjml 4->5 bump (§0.4) has a smoke alarm.
+   *
+   * Note the limit: completeness, not correctness. It cannot catch
+   * mis-targeting that still counts stamped === expected.
+   */
+  unstamped?: string[];
 }
 
 function IframePreviewInner(

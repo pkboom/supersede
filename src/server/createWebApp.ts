@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { DbHandle } from "../db/index.js";
 import type { LLMAdapterFactory } from "../llm/index.js";
 import { rateLimit } from "./middleware/rateLimit.js";
+import { originGuard } from "./middleware/originGuard.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createQueryRoutes } from "./routes/query.js";
 import { createRenderRoutes } from "./routes/render.js";
@@ -45,7 +46,14 @@ export function createWebApp(opts: CreateWebAppOptions): WebApp {
   const app = new Hono<AppEnv>();
   const clock: Clock = opts.clock ?? (() => Date.now());
 
-  // Public routes (no gate — the deployer controls network access).
+  // Host/Origin guard FIRST, before every route including reads (§0.6). The
+  // live vector is DNS rebinding, which bypasses CORS entirely and would
+  // otherwise yield full read/write to every template; exfiltrating templates
+  // over GET is the interesting attack, so this cannot be limited to mutations.
+  // README.md documented this defence long before it existed.
+  app.use("*", originGuard());
+
+  // Public routes (no auth gate — the deployer controls network access).
   app.route("/", createHealthRoutes());
   app.route("/", createRenderRoutes());
 
