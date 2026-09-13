@@ -16,11 +16,13 @@ web/dist/
 # SQLite data dir (per-deploy persistent disk; never committed).
 data/
 
-# Drizzle migration metadata (kept out of VCS; SQL files in drizzle/migrations/ ARE committed).
-drizzle/migrations/meta/
-
 # OS junk
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+
+# Scratch directories used by review/verification agents. Never source.
+.verif-probe/
+.plan/
+.plan-research/

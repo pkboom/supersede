@@ -22,7 +22,10 @@ export const templates = sqliteTable(
 
 // Singleton settings row — there's only ever one row, identified by `id = 1`.
 // `defaultProvider`/`defaultMode` are reserved for future provider plurality
-// (v3+) but pinned to "anthropic"/"api" today.
+// (v3+) but pinned to "anthropic"/"cli" today. The default below IS the source
+// of truth: the drifted `'api'` that used to appear here, in the committed
+// baseline migration and in OPERATIONS.md was settled by regenerating the
+// migration from this file (plan §0.1/§0.6).
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey().default(1),
   defaultProvider: text("default_provider").notNull().default("anthropic"),

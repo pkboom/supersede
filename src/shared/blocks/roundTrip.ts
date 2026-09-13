@@ -50,12 +50,22 @@ export function normalizeWhitespace(source: string): string {
       .replace(/\s+/g, " ") // collapse remaining runs to single space
       .trim();
   }
+  //
+  // Idempotency (plan §0.3): an earlier version appended a literal `" "` on
+  // BOTH sides of every protected body. Both sides of `assertRoundTrip` are
+  // normalized exactly once, so the padding cancelled and the bug was invisible
+  // there — but it made `normalizeWhitespace` non-idempotent: each call grew
+  // every protected range by two characters
+  // (`<mj-text>hi</mj-text>` -> `<mj-text> hi </mj-text>` -> `<mj-text>  hi  </mj-text>`).
+  // Anything comparing a normalized string against an already-normalized one
+  // silently disagreed. The separator was never needed: a protected body is
+  // bounded by the `>` and `<` of its own tags, so it cannot run together with
+  // the collapsed text around it.
   let out = "";
   let i = 0;
   for (const r of protectedRanges) {
-    out += collapseOutside(source.slice(i, r.start)) + " ";
+    out += collapseOutside(source.slice(i, r.start));
     out += r.body;
-    out += " ";
     i = r.end;
   }
   out += collapseOutside(source.slice(i));

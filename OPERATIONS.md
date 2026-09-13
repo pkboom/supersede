@@ -15,7 +15,7 @@
 `/query` supports two modes, picked via `Settings → Mode` and persisted to the
 singleton settings row:
 
-- **`api` mode** (default) — the server reads `ANTHROPIC_API_KEY` from its
+- **`api` mode** — the server reads `ANTHROPIC_API_KEY` from its
   env. With the var unset, `POST /api/templates/:id/query` returns **HTTP
   412** `{"error":"ANTHROPIC_API_KEY env var is not set on the server"}`.
 - **`cli` mode** — the server shells out to the local `claude` binary in

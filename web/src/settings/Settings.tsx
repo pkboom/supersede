@@ -2,7 +2,9 @@ import { useState } from "react";
 import { ApiError } from "../api/client.js";
 import { useSettings } from "../hooks/useSettings.js";
 
-const ALLOWED_MODELS = ["claude-opus-4-7", "claude-sonnet-4-6"] as const;
+// Single source of truth shared with the server (plan §0.6). Duplicating this
+// literal made the page able to offer a model the server would reject.
+import { ALLOWED_MODELS } from "@shared/models.js";
 
 /**
  * Open-source single-user settings page.
