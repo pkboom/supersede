@@ -28,19 +28,19 @@ function run(...args: string[]): { out: string; code: number } {
   }
 }
 
-const FOOTER = `<mj-section><mj-column><mj-text>Shoe Brand · 123 Old Street</mj-text></mj-column></mj-section>`;
+const FOOTER = `<tr><td><p>Shoe Brand · 123 Old Street</p></td></tr>`;
 
 const ORIGINAL =
-  `<mjml><mj-body>` +
-  `<mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section>` +
+  `<html><body>` +
+  `<tr><td><p>Hello</p></td></tr>` +
   FOOTER +
-  `</mj-body></mjml>`;
+  `</body></html>`;
 
 const REWIRED =
-  `<mjml><mj-body>` +
-  `<mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section>` +
-  `<mj-component component-id="shoe-brand/footer" revision="1" />` +
-  `</mj-body></mjml>`;
+  `<html><body>` +
+  `<tr><td><p>Hello</p></td></tr>` +
+  `<x-component component-id="shoe-brand/footer" revision="1" />` +
+  `</body></html>`;
 
 beforeEach(() => {
   job = mkdtempSync(join(tmpdir(), "handover-"));
@@ -51,17 +51,17 @@ afterEach(() => {
 
 describe("handover CLI", () => {
   it("produces byte-identical before/after renders and a clean plain export", () => {
-    write("components/shoe-brand/footer.mjml", FOOTER);
-    write("templates/welcome.mjml", REWIRED);
-    write("originals/welcome.mjml", ORIGINAL);
+    write("components/shoe-brand/footer.html", FOOTER);
+    write("templates/welcome.html", REWIRED);
+    write("originals/welcome.html", ORIGINAL);
 
     const { out, code } = run();
     expect(code).toBe(0);
-    expect(out).toContain("1/1 byte-identical renders");
+    expect(out).toContain("1/1 byte-identical");
 
-    const plain = readFileSync(join(job, "plain-export", "welcome.mjml"), "utf8");
+    const plain = readFileSync(join(job, "plain-export", "welcome.html"), "utf8");
     expect(plain).toBe(ORIGINAL);
-    expect(plain).not.toContain("mj-component");
+    expect(plain).not.toContain("x-component");
     expect(plain).not.toContain("data-slot");
 
     expect(existsSync(join(job, "proof", "welcome.before.html"))).toBe(true);
@@ -71,59 +71,48 @@ describe("handover CLI", () => {
 
   it("strips a data-slot marker so plain-export carries no trace of the tool", () => {
     write(
-      "components/shoe-brand/btn.mjml",
-      `<mj-button data-slot="label" href="https://x.test">Buy</mj-button>`
+      "components/shoe-brand/btn.html",
+      `<a data-slot="label" href="https://x.test">Buy</a>`
     );
     write(
-      "templates/t.mjml",
-      `<mjml><mj-body><mj-section><mj-column>` +
-        `<mj-component component-id="shoe-brand/btn" revision="1" ov-slot-label="Shop now" />` +
-        `</mj-column></mj-section></mj-body></mjml>`
+      "templates/t.html",
+      `<html><body><table><tr><td>` +
+        `<x-component component-id="shoe-brand/btn" revision="1" ov-slot-label="Shop now" />` +
+        `</td></tr></table></body></html>`
     );
 
     const { code } = run();
     expect(code).toBe(0);
-    const plain = readFileSync(join(job, "plain-export", "t.mjml"), "utf8");
+    const plain = readFileSync(join(job, "plain-export", "t.html"), "utf8");
     expect(plain).toContain("Shop now");
     expect(plain).not.toContain("data-slot");
   });
 
   it("FAILS LOUDLY when a reference cannot be resolved, rather than shipping a gap", () => {
-    write("components/shoe-brand/other.mjml", FOOTER);
-    write("templates/welcome.mjml", REWIRED);
+    write("components/shoe-brand/other.html", FOOTER);
+    write("templates/welcome.html", REWIRED);
 
     const { out, code } = run();
     expect(code).toBe(1);
     expect(out).toMatch(/No revision 1 of component/);
   });
 
-  it("refuses <mj-include/>, which reads files off the operator's disk", () => {
-    write("components/shoe-brand/footer.mjml", FOOTER);
-    write(
-      "templates/evil.mjml",
-      `<mjml><mj-body><mj-include path="/etc/passwd" /></mj-body></mjml>`
-    );
-
-    const { out, code } = run();
-    expect(code).toBe(1);
-    expect(out).toContain("mj-include");
-  });
 
   it("reports a differing render instead of claiming success", () => {
-    write("components/shoe-brand/footer.mjml", `<mj-section><mj-column><mj-text>DIFFERENT</mj-text></mj-column></mj-section>`);
-    write("templates/welcome.mjml", REWIRED);
-    write("originals/welcome.mjml", ORIGINAL);
+    write("components/shoe-brand/footer.html", `<tr><td><p>DIFFERENT</p></td></tr>`);
+    write("templates/welcome.html", REWIRED);
+    write("originals/welcome.html", ORIGINAL);
 
     const { out, code } = run();
     expect(code).toBe(1);
-    expect(out).toContain("renders DIFFER");
+    expect(out).toContain("bytes DIFFER");
     expect(out).toContain("0/1 byte-identical");
   });
 
   it("--check writes nothing", () => {
-    write("components/shoe-brand/footer.mjml", FOOTER);
-    write("templates/welcome.mjml", REWIRED);
-    write("originals/welcome.mjml", ORIGINAL);
+    write("components/shoe-brand/footer.html", FOOTER);
+    write("templates/welcome.html", REWIRED);
+    write("originals/welcome.html", ORIGINAL);
 
     const { code } = run("--check");
     expect(code).toBe(0);
@@ -132,8 +121,8 @@ describe("handover CLI", () => {
   });
 
   it("rejects a component body with two roots, naming the component", () => {
-    write("components/shoe-brand/footer.mjml", `${FOOTER}${FOOTER}`);
-    write("templates/welcome.mjml", REWIRED);
+    write("components/shoe-brand/footer.html", `${FOOTER}${FOOTER}`);
+    write("templates/welcome.html", REWIRED);
 
     const { out, code } = run();
     expect(code).toBe(1);

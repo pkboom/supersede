@@ -1,15 +1,3 @@
-/**
- * Substitutes `<mj-component/>` references with the content of the revision
- * they pin, applies per-instance `ov-*` overrides, and returns provenance
- * alongside the MJML. The regions are returned rather than discarded because
- * they exist only at the moment of substitution and cannot be recovered from
- * the expanded string.
- *
- * `expand` throws if any reference survives to its exit. That guard lives here
- * rather than in a caller so every present and future caller inherits it: mjml
- * drops an unknown `<mj-component/>` under soft validation and returns HTTP
- * 200 with the content silently gone.
- */
 import {
   COMPONENT_TAG,
   MAX_EXPANDED_BYTES,
@@ -71,7 +59,7 @@ function findSurvivors(src: string, comments: Range[]): number[] {
 
 /**
  * Index among the parent's ELEMENT children — not among references, which
- * would report 0 for the component in `<mj-text/><mj-component/>`.
+ * would report 0 for the component in `<td></td><x-component/>`.
  *
  * Computable from the stored source only because of the single-root invariant:
  * one reference substitutes to exactly one node, so this index is the same in
@@ -203,7 +191,7 @@ function applyOverrides(
       }
       if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(value)) {
         throw new ExpansionError(
-          `Invalid tag name "${value}" in "${key}" on "${componentId}": expected an element name, e.g. mj-button`
+          `Invalid tag name "${value}" in "${key}" on "${componentId}": expected an element name, e.g. a`
         );
       }
       tagAsserts.set(pathStr, value);
@@ -256,7 +244,7 @@ function applyOverrides(
       throw new ExpansionError(
         `Path override ${PATH_PREFIX}${pathStr}-* on "${componentId}" has no ${TAG_ASSERT_PREFIX}${pathStr} assertion. ` +
           `An index path is positional and the component's interior can be rearranged by a later revision, ` +
-          `so the expected tag is required, e.g. ${TAG_ASSERT_PREFIX}${pathStr}="mj-button".`
+          `so the expected tag is required, e.g. ${TAG_ASSERT_PREFIX}${pathStr}="a".`
       );
     }
   }
@@ -314,7 +302,7 @@ function applyOverrides(
 }
 
 /**
- * `data-slot` is authoring metadata for the stored body. mjml rejects it, and
+ * `data-slot` is authoring metadata for the stored body. It must not ship, and
  * leaving it in puts a marker the customer never typed into every file.
  *
  * Called unconditionally on the way out rather than from `replaceSlotText`: a
@@ -363,7 +351,7 @@ function stripSlotMarkers(body: string): string {
  * elements, since emptying it would silently delete a subtree.
  *
  * The value is interpolated into element content, so it must be escaped:
- * `ov-slot-x="</mj-text><mj-raw><script>…"` would otherwise close the slot and
+ * `ov-slot-x="</td><script>…"` would otherwise close the slot and
  * inject into the delivered email. Escaping here is one-way — the value is
  * never read back out as source — so it cannot compound.
  */
@@ -425,7 +413,7 @@ export interface ExpandOptions {
   /**
    * Overrides the pinned revision per component, which is how a dry run is
    * produced: `expand(t, store)` against `expand(t, store, { pins })` is a
-   * real before/after MJML diff rather than the string "revision 4 -> 5".
+   * real before/after HTML diff rather than the string "revision 4 -> 5".
    */
   pins?: Record<string, number>;
 }
@@ -459,12 +447,12 @@ export function expand(
       .join(" | ");
     throw new UnexpandedReferenceError(
       `${survivors.length} unexpanded <${COMPONENT_TAG}/> reference(s) survived expansion: ${detail}. ` +
-        `Refusing to return MJML that would compile to HTTP 200 with the content silently missing.`,
+        `Refusing to return HTML that would ship with the content silently missing.`,
       survivors.map((at) => out.slice(at, at + 60))
     );
   }
 
-  return { mjml: out, regions };
+  return { html: out, regions };
 }
 
 function expandInto(

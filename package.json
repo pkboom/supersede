@@ -2,22 +2,20 @@
   "name": "email-design-system",
   "version": "0.0.1",
   "private": true,
-  "description": "Local single-user MJML email designer.",
+  "description": "Local single-user HTML email component extractor.",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "setup": "node src/cli/setup.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "components": "tsx src/cli/component-slice.ts",
-    "measure": "tsx src/cli/measure-templates.ts",
-    "handover": "tsx src/cli/handover.ts"
+    "handover": "tsx src/cli/handover.ts",
+    "scan": "tsx src/cli/scan.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^4.5.6",
-    "mjml": "^4.18.0"
+    "parse5": "^8.0.1"
   },
   "devDependencies": {
     "@types/node": "^20",

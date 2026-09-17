@@ -1,10 +1,10 @@
 import { ExpansionError } from "./types.js";
 
 /**
- * Quote-aware tag scanning. Deliberately not a regex: `/<mj-component[^>]*\/>/`
+ * Quote-aware tag scanning. Deliberately not a regex: `/<x-component[^>]*\/>/`
  * stops at a `>` inside an attribute value —
  *
- *     <mj-component component-id="x" ov-content="a > b" />
+ *     <x-component component-id="x" ov-content="a > b" />
  *
  * — and produces a truncated match. The expander's exit guard would catch the
  * fallout, but a correct scanner should not be leaning on it.
@@ -14,7 +14,7 @@ import { ExpansionError } from "./types.js";
 export class UnterminatedCommentError extends ExpansionError {
   constructor(readonly at: number) {
     super(
-      `Unterminated <!-- comment at offset ${at}. Refusing to scan: mjml treats ` +
+      `Unterminated <!-- comment at offset ${at}. Refusing to scan: the rest ` +
         `everything after it as comment content, so a reference inside would be ` +
         `silently absent from the output.`
     );
@@ -36,19 +36,19 @@ export interface CommentScan {
 /**
  * Inside these, `<!--` is ordinary text and opens no comment. `textarea` is
  * deliberately absent: htmlparser2 treats it as raw text only in HTML mode, and
- * mjml parses as XML — skipping its content here would call live what the real
+ * Email HTML is scanned as text — skipping its content here would call live what the real
  * parser comments out.
  */
 const RAW_TEXT_ELEMENTS = ["script", "style", "title"];
 
 /**
  * Byte ranges covered by XML comments. This must agree with htmlparser2, the
- * parser mjml actually uses: a disagreement is a leak in one direction or a
+ * parser a client actually uses: a disagreement is a leak in one direction or a
  * false rejection in the other.
  *
  * An unterminated comment is reported rather than thrown, because it only
  * matters when a reference could be hidden by it — a template with a stray
- * `<!--` and no components renders fine in mjml.
+ * `<!--` and no components renders fine in a client.
  */
 export function scanComments(src: string): CommentScan {
   const ranges: Range[] = [];
@@ -59,7 +59,7 @@ export function scanComments(src: string): CommentScan {
     const lt = src.indexOf("<", i);
     if (lt === -1) break;
 
-    // CDATA is not markup, and mjml enables it. Without this the tag-skip below
+    // CDATA is not markup. Without this the tag-skip below
     // stops at the first `>` inside it and leaks a phantom comment opener.
     if (src.startsWith("<![CDATA[", lt)) {
       const close = src.indexOf("]]>", lt + 9);
@@ -155,7 +155,7 @@ export interface ScannedTag {
 
 /**
  * Takes the slice between the end of a tag name and its terminating `>`.
- * Unquoted values are accepted because hand-authored MJML carries them, and
+ * Unquoted values are accepted because hand-authored email HTML carries them, and
  * dropping an attribute silently would be worse than reading it.
  */
 function parseAttrs(src: string): ScannedAttr[] {
@@ -174,7 +174,7 @@ function parseAttrs(src: string): ScannedAttr[] {
 
     // A valueless attribute (`disabled`) is kept with an empty value rather than
     // dropped. It does not round-trip — `renderOpenTag` emits `disabled=""` —
-    // but MJML has none, so nothing here depends on the distinction.
+    // but none apply here, so nothing depends on the distinction.
     if (src[i] !== "=") {
       out.push({ name, value: "" });
       continue;
@@ -219,7 +219,7 @@ export function findTag(
       continue;
     }
 
-    // `<mj-component-group` must not match `<mj-component`.
+    // `<x-component-group` must not match `<x-component`.
     const after = src[idx + tagName.length + 1];
     if (after !== undefined && /[\w-]/.test(after)) {
       searchFrom = idx + 1;
@@ -313,7 +313,7 @@ export function readRootTag(src: string): ScannedTag | null {
  * `ov-*` override lands on the component root:
  *
  *     ov-color='#000" href="https://evil.test/steal'
- *       -> <mj-button color="#000" href="https://evil.test/steal">
+ *       -> <a style="color:#000" href="https://evil.test/steal">
  *
  * A value parsed from double-quoted source cannot contain a bare `"`, so this
  * is a no-op on the round-trip path.

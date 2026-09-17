@@ -22,18 +22,20 @@ just never arrives as an invoice.
 
 Move each repeated block into one file, and leave a note in its place.
 
-    before   <mj-text>Shoe Brand · 123 Old Street · Unsubscribe</mj-text>
-    after    <mj-component component-id="shoe-brand/footer" revision="1" />
+    before   <tr><td><p>Shoe Brand · 123 Old Street</p></td></tr>
+    after    <x-component component-id="shoe-brand/footer" revision="1" />
 
 Before sending, a program reads each note, fetches the block, and pastes it in.
-Out comes ordinary MJML — **byte-identical to what they had**. Nobody can tell
+Out comes ordinary HTML — **byte-identical to what they had**. Nobody can tell
 anything changed.
 
 What changed is the price of the *next* change: one edit instead of forty.
 
 **Versions are explicit.** Publishing footer v2 changes nothing — templates still
-pin `revision="1"`. A dry-run diff shows exactly what would change. Then one
-command rewrites one attribute per template. Nothing ever moves behind their back.
+pin `revision="1"`. Expanding against a pin produces the real after-HTML, so you
+can read exactly what would change before committing to it. Moving a template to
+v2 is one attribute. Nothing ever moves behind their back. (The pin machinery is
+in the library; the two commands on top of it are §9 "Not built".)
 
 ---
 
@@ -41,7 +43,7 @@ command rewrites one attribute per template. Nothing ever moves behind their bac
 
 **Your laptop.** No servers, no hosting, no accounts, nothing deployed.
 
-    they email you .mjml files
+    they email you .html files
       → you work in a folder locally
       → you zip it back and invoice
 
@@ -61,16 +63,16 @@ runs** — wipe it between customers.
     shoe-brand/
       templates/       their emails, rewired
       components/      each shared block, in one place
-      proof/           before/after renders — identical
+      proof/           before vs after — byte-identical
       plain-export/    their emails with everything pasted back in
       HOW-TO.md
 
 `proof/` sells the job. `plain-export/` removes their reason to say no — if they
 hate it, their templates work with no trace of your tool.
 
-**The handover demo:** ask for a real change they need. Edit the component.
-Show them nothing has changed yet. Run the diff. Apply. Thirty seconds, for
-something that used to take two days.
+**The handover demo:** ask for a real change they need. Edit the one component
+file. Re-run the handover. Thirty seconds, for something that used to take two
+days.
 
 ---
 
@@ -184,59 +186,73 @@ that money costs you the answer you were buying.
 
 ---
 
-## 9. What is actually built — and what is dead weight
+## 9. What is actually built
 
-### The repo contains two products
+### The repo is now one product
 
-It was built as an **AI email designer** (canvas, drag-and-drop, Claude pane).
-The business above does not use any of that. You work in a text editor and a
-terminal; the customer receives files.
+It was built as an **AI email designer** (canvas, drag-and-drop, Claude pane) on
+top of an MJML parser. Both are gone: `web/` was deleted in `0856b63`, and
+`src/shared/blocks` — 1,964 lines of MJML parse/serialise — went with the switch
+to raw HTML. What is left is what this business actually uses.
 
 | part | lines | for this business |
 |---|---|---|
-| `src/shared/blocks` — MJML parser/serializer | 2,620 | **core.** the scan tool gets built on it |
-| `src/shared/components` — expander, guard, overrides | — | **core.** this is the product |
-| `POST /api/render` — MJML → HTML | — | **needed** for the `proof/` renders |
-| `web/src` — the React canvas editor | 4,707 | **not used** |
+| `src/shared/components` — expander, store, tag scanner, types | 1,380 | **core.** this is the product |
+| `src/cli/handover.ts` — publish, expand, prove, export | 192 | **core.** the whole delivery |
+| `src/cli/term.ts` — terminal colours | 19 | plumbing |
 
-### Freeze the canvas, don't delete it
+`src/` is 1,591 lines. There is no server, no API, no `web/`. `proof/` used to
+need `POST /api/render`; it doesn't any more, because there is nothing to render.
 
-Stop paying maintenance on `web/src`: no test fixing, no mjml-v5 compatibility
-work, no browser sign-off. It cost real work and a future screen may reuse parts
-of it, so it stays in the repo — it just stops being a thing you owe anything to.
+### The proof got stronger. One guard got weaker.
 
-**Consequence:** the 61 failing tests are all `web.*` React tests. They block
-nothing. Same for the untested canvas click-selection overlay in `NEXT.md` §4.
-Both were on an earlier to-do list of mine; both were wrong.
+Before/after used to mean two MJML files pushed through `mjml2html` and the
+output compared. Both sides are plain HTML now, so `handover` sha256s the
+delivered bytes directly. That is strictly stronger — it cannot be satisfied by
+two different inputs that happen to compile the same way.
+
+**The other half of that trade is a real loss.** The MJML compiler was also a
+second, independent refusal of an unexpanded reference. Raw HTML has no
+compiler, and a surviving `<x-component/>` renders as *nothing* — the email
+ships without its footer and nobody is told. That is now caught by a single
+`assertNoSurvivors` over the final bytes in `handover.ts`. One guard where there
+were two.
 
 ### "They want a screen" is not "finish the canvas"
 
-The screen answer C asks for is a different, much smaller thing: list the
-components, edit one, read the diff, press Apply. Three screens. Do not reach for
-the canvas to build it.
+There is no canvas left to reach for, which makes this easier. The screen answer
+C asks for is small: list the components, edit one, read the diff, press Apply.
+Three screens.
 
 ### Works today
 
+- `npm run handover -- <job-dir>` — publishes every `components/**/*.html`,
+  expands every `templates/**/*.html`, writes `proof/` + `REPORT.md` +
+  `plain-export/`, exits 1 on any failure. `--check` writes nothing.
 - expander + throw-on-survivor guard
-- `ov-*` per-instance overrides
-- dry-run diff, pin bump, bulk export
-- `npm run measure` over a template directory
+- `ov-*` per-instance overrides, `data-slot` filling, nesting under a depth cap
+- byte-identical before/after against `originals/`. A template with no matching
+  original is reported unresolved rather than counted as proven — it does not
+  refuse the run
+- 97 tests across 3 files, all passing; `tsc --noEmit` clean
 
 ### Not built
 
-- a `publish <id> <file.mjml>` command — today component bodies are **hardcoded
-  string constants** in `scripts/component-slice.ts`
-- a `scan` command to find repeated blocks across a template folder
-- a components table in the DB — it's in-memory JSON, on purpose
+- a standalone `publish <id> <file.html>` command. `handover` does publish from
+  files — no more hardcoded string constants — but into a fresh in-memory store
+  each run, so every component is always revision 1 and templates can only pin
+  `revision="1"`
+- a `scan` command to find repeated blocks across a template folder — *in
+  progress*
+- the dry-run diff and the pin bump as commands. Both exist as library
+  capability (`expand(src, store, { pins })`, tested) with no CLI on top
+- persistence — the store is in-memory JSON, on purpose, until a real agency has
+  used the model and shaped the schema
 - auth, billing, hosting, multi-brand
 
-The server returns **HTTP 422** for any template containing `<mj-component/>` —
-no store is wired in. Deliberate: plan §12 scopes the slice to the terminal until
-a real agency has used it.
-
-**Build before migration #2, not before #1:** `publish` and `scan`. Nothing else.
-They are the only two things that make the next job faster, and faster next jobs
-are the entire return on this repo.
+**Build before migration #2, not before #1:** `scan`, then `publish` and the pin
+commands. Nothing else. They are the only things that make the next job faster,
+and faster next jobs are the entire return on this repo.
 
 ---
 
@@ -257,7 +273,19 @@ Replace them after migration #1 with what it actually took.
 ## 11. The open question this is all built to answer
 
 Nobody knows whether agencies would pay *monthly* for this — not you, not your
-research. `business-ideas/notes/email-production-bottleneck.md` is marked
-UNRESOLVED on exactly this, and `open-questions.md` lists it verbatim.
+research. `../business-ideas/notes/email-production-bottleneck.md`, in the
+separate wiki repo, marks it UNRESOLVED: demand is measured in *labour*
+($78–$395 per outsourced template), supply in *tools* ($10–$30/mo), and nothing
+shows the first converting into the second. `open-questions.md` beside it
+carries the same question and already names three paid migrations as its route,
+"Unstarted".
 
-**Three paid migrations answer it, and you get paid either way.**
+**Those two notes are not a second opinion.** This plan's reasoning came from
+them, and the bottleneck note now cites this plan back — it says so itself: *"the
+source's own reasoning is derived from this page, so it carries no evidential
+weight in either direction."* The question being open in both places is one
+belief recorded twice, not two findings agreeing. Nothing outside your own head
+has tested it yet.
+
+**Which is the point. Three paid migrations answer it, and you get paid either
+way.**

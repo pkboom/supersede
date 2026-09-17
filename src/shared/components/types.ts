@@ -1,17 +1,3 @@
-/**
- * Templates do not store component content. They store a reference:
- *
- *     <mj-component component-id="shoe-brand/primary-button" revision="4" />
- *
- * Content lives once, in immutable revisions; expansion happens at render and
- * export only. Propagation is therefore a revision bump — one attribute value
- * per referencing template and nothing else.
- *
- * Treat that blast radius as an invariant, not a happy property. If a change
- * makes propagation rewrite more than the pin, it has removed the reason this
- * model was chosen over copying content into each template.
- */
-
 /** Depth cap for components referencing other components. */
 export const MAX_EXPANSION_DEPTH = 5;
 
@@ -22,8 +8,17 @@ export const MAX_EXPANSION_DEPTH = 5;
  */
 export const MAX_EXPANDED_BYTES = 8 * 1024 * 1024;
 
-/** The reference tag. Fixed shape, always self-closing. */
-export const COMPONENT_TAG = "mj-component";
+/**
+ * The reference tag. Fixed shape, always self-closing.
+ *
+ * HTML has no self-closing syntax for non-void elements — a browser parses
+ * `<x-component/>` as an OPEN tag and nests the rest of the document inside it.
+ * That is survivable only because a file containing references is never handed
+ * to an HTML parser: expansion happens before sending, so the only reader is
+ * the byte scanner in `tagScan.ts`. Never run a DOM parser over a rewired
+ * template.
+ */
+export const COMPONENT_TAG = "x-component";
 
 /** `ov-<attr>` — sets an attribute on the component's root element. */
 export const OVERRIDE_PREFIX = "ov-";
@@ -48,10 +43,9 @@ export const PATH_PREFIX = "ov-at-";
  *
  * An index path is positional and the thing it indexes is designed to change.
  * If a later revision reorders the interior, the path silently resolves to a
- * different element, and mjml drops an unknown attribute on the wrong node
- * without an error — so every template that bumped its pin renders HTTP 200
- * with its link gone. An optional guard on a silent-corruption path is not a
- * guard.
+ * different element, and the attribute lands on the wrong node with nothing to
+ * report it — so every template that bumped its pin ships with its link gone.
+ * An optional guard on a silent-corruption path is not a guard.
  *
  * It does not catch two same-tag siblings swapping places; declared slots are
  * the answer to that. It converts the dominant failure from silent-wrong-node
@@ -74,7 +68,7 @@ export interface ComponentRevision {
   /** Monotonic, starting at 1. */
   revision: number;
   /**
-   * MJML source with EXACTLY ONE root element. That invariant keeps stored and
+   * HTML source with EXACTLY ONE root element. That invariant keeps stored and
    * expanded index paths 1:1, so a stored path is literally the same path in
    * the expanded tree and resolution is "walk up to the instance root".
    */
@@ -93,7 +87,7 @@ export type InstanceStatus = "reachable" | "opaque";
 export interface ComponentInstance {
   componentId: string;
   revision: number;
-  /** Byte range of the `<mj-component/>` tag in the scanned source. */
+  /** Byte range of the `<x-component/>` tag in the scanned source. */
   start: number;
   end: number;
   /** `ov-*` attributes, prefix still attached, in source order. */
@@ -108,16 +102,16 @@ export interface ComponentInstance {
  *
  * This exists only inside the expander at the moment of substitution and is
  * unrecoverable from the expanded string afterwards — you cannot reconstruct
- * "this `<mj-text>` came from the footer's headline slot" after the fact.
+ * "this `<td>` came from the footer's headline slot" after the fact.
  */
 export interface ExpansionRegion {
-  /** Byte range in the EXPANDED MJML. */
+  /** Byte range in the EXPANDED HTML. */
   start: number;
   end: number;
   componentId: string;
   revision: number;
   /**
-   * The `<mj-component/>` node's ancestry, outermost first, each element
+   * The `<x-component/>` node's ancestry, outermost first, each element
    * `componentId@revision#siblingIndex`. Components nest, so one expanded path
    * can sit inside several regions; the chain is what makes "which component
    * did I click" answerable. The sibling index is load-bearing — without it,
@@ -141,7 +135,7 @@ export interface ExpansionRegion {
 }
 
 export interface ExpansionResult {
-  mjml: string;
+  html: string;
   regions: ExpansionRegion[];
 }
 
@@ -154,9 +148,9 @@ export class ExpansionError extends Error {
 
 /**
  * Its own type because it is the worst failure in the system and callers may
- * want to distinguish it: mjml drops an unknown `<mj-component/>` under soft
- * validation and returns HTTP 200 with the content silently gone. One missed
- * expansion is a footerless email to a client's list with no signal anywhere.
+ * want to distinguish it: a surviving `<x-component/>` renders as nothing at
+ * all, and there is no compiler left to object. One missed expansion is a
+ * footerless email to a client's list with no signal anywhere.
  */
 export class UnexpandedReferenceError extends ExpansionError {
   constructor(

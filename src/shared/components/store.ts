@@ -25,7 +25,7 @@ export function assertSingleRoot(componentId: string, body: string): void {
 
   // An unterminated comment here is worse than one in a template: the body is
   // substituted into every template referencing it, so one bad publish
-  // truncates all of them, and mjml reports nothing because the reference did
+  // truncates all of them, and nothing reports it because the reference did
   // expand.
   const scan = scanComments(trimmed);
   if (scan.unterminatedAt !== undefined) {
