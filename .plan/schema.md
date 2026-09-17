@@ -617,7 +617,7 @@ is the class the guard is blind to, and it lands on a 200. So tier 1 is reachabl
 { "line": 1,
   "message": "Element mj-component doesn't exist or is not registered",
   "tagName": "mj-component",
-  "formattedMessage": "Line 1 of /Users/keunbae/code/email-designer-claude-code (mj-component) — …" }
+  "formattedMessage": "Line 1 of /Users/keunbae/code/email-design-system (mj-component) — …" }
 ```
 
 `tagName` is present and exact, at body level and nested inside a column, so

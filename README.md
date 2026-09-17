@@ -1,4 +1,4 @@
-# email-designer
+# email-design-system
 
 A local app that launches an AI-powered email designer powered by Claude Code subagents. Edit MJML email templates via a drag-and-drop canvas or by sending natural-language queries to Claude.
 
@@ -29,7 +29,7 @@ Because `./workspace/` persists across runs, two states can wedge a fresh `npm s
 
 ```bash
 git clone <repo>
-cd email-designer-claude-code
+cd email-design-system
 npm install
 npm start
 # then open http://localhost:5173/

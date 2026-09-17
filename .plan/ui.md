@@ -1385,7 +1385,7 @@ the real error object rather than assuming, and it carries two things that must 
 { "line": 1,
   "message": "Element mj-component doesn't exist or is not registered",
   "tagName": "mj-component",
-  "formattedMessage": "Line 1 of /Users/keunbae/code/email-designer-claude-code (mj-component) — …" }
+  "formattedMessage": "Line 1 of /Users/keunbae/code/email-design-system (mj-component) — …" }
 ```
 
 - **`formattedMessage` interpolates the server's absolute filesystem path** when mjml is given no

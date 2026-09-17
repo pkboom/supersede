@@ -192,7 +192,7 @@ button); every template using it updates. This document verifies the data-model
 assumption that makes it cheap, designs the engine, and lists where the design
 is wrong.
 
-Evidence lives in `/Users/keunbae/code/email-designer-claude-code/.plan/scratch/`
+Evidence lives in `/Users/keunbae/code/email-design-system/.plan/scratch/`
 (`propagation-proof.test.ts`, `probe2.test.ts`, `probe3.test.ts`, `bench.test.ts`).
 They are scratch, not suite members. Run with
 `npx vitest run .plan/scratch/<file>`.

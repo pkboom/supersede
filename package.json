@@ -1,5 +1,5 @@
 {
-  "name": "email-designer",
+  "name": "email-design-system",
   "version": "0.0.1",
   "private": true,
   "description": "Local single-user MJML email designer with Anthropic-API-driven Claude turns.",
