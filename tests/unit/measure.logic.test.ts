@@ -37,7 +37,7 @@ function measure(files: Record<string, string>): {
     }
     const out = execFileSync(
       "npx",
-      ["tsx", "scripts/measure-templates.ts", dir, "--json"],
+      ["tsx", "src/cli/measure-templates.ts", dir, "--json"],
       { encoding: "utf8", cwd: process.cwd() }
     );
     return JSON.parse(out.slice(out.indexOf("{")));

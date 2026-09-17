@@ -2,7 +2,7 @@
  * Attr-Map mutation helpers (A-prime contract).
  *
  * Every modeled `BlockNode.attrs` is a `Map<string, string>` whose iteration
- * order IS the source order Claude (or hand-edited MJML) authored. The
+ * order IS the source order the MJML was authored in. The
  * serializer iterates this Map in insertion order and emits each `key="value"`
  * directly, so the Map's order IS the on-disk attr order.
  *

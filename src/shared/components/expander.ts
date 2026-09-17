@@ -355,6 +355,81 @@ function applyOverrides(
 }
 
 /**
+ * Remove every `data-slot="…"` marker from an expanded component body.
+ *
+ * The marker is authoring metadata for the STORED body: it tells
+ * `replaceSlotText` which element a named text override targets. It has no
+ * meaning in the delivered email, and mjml rejects it — `Attribute data-slot
+ * is illegal` under soft validation, and a THROW under strict. Left in, it
+ * also breaks the one promise the expander exists to keep: expanded output is
+ * supposed to be byte-identical to the MJML the customer already had, and a
+ * marker they never typed is a visible trace of the tool in every file.
+ *
+ * Stripping happens on the way OUT, unconditionally — not inside
+ * `replaceSlotText`. A slot that is declared but never overridden never
+ * reaches that function (`applyOverrides` returns early when a reference
+ * carries no overrides), so fixing only the override path would leak the
+ * marker from exactly the templates that customised nothing.
+ *
+ * The attribute text is excised from the open tag rather than the tag being
+ * re-emitted through `renderOpenTag`, which normalises quote style and
+ * collapses inter-attribute whitespace. Re-emitting would trade this leak for
+ * a subtler one: every slot-bearing element in a single-quoted or multi-line
+ * source file would come back reformatted.
+ */
+function stripSlotMarkers(body: string): string {
+  // Collect spans first and splice from the end, so earlier offsets stay valid.
+  const cuts: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+
+  while (cursor < body.length) {
+    const lt = body.indexOf("<", cursor);
+    if (lt === -1) break;
+    const m = /^<\s*([A-Za-z][\w-]*)/.exec(body.slice(lt));
+    if (!m) {
+      cursor = lt + 1;
+      continue;
+    }
+    let tag: ScannedTag | null;
+    try {
+      tag = findTag(body, m[1]!, lt);
+    } catch {
+      // Malformed open tag: leave it untouched. The survivor guard in
+      // render.ts reports the real problem with better context than a
+      // cosmetic pass could.
+      return body;
+    }
+    if (!tag || tag.start !== lt) {
+      cursor = lt + 1;
+      continue;
+    }
+
+    if (tag.attrs.some((a) => a.name === SLOT_ATTR)) {
+      const open = body.slice(tag.start, tag.end);
+      // Anchored to the attribute name preceded by whitespace, so `data-slot`
+      // occurring inside another attribute's VALUE is not matched. Quoted
+      // values cannot contain the delimiting `>`, and an unquoted value
+      // cannot contain whitespace or `>`, so the span is unambiguous.
+      const re = /\s+data-slot\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/;
+      const hit = re.exec(open);
+      if (hit) {
+        cuts.push({
+          start: tag.start + hit.index,
+          end: tag.start + hit.index + hit[0].length,
+        });
+      }
+    }
+    cursor = tag.end;
+  }
+
+  let out = body;
+  for (let i = cuts.length - 1; i >= 0; i--) {
+    out = out.slice(0, cuts[i]!.start) + out.slice(cuts[i]!.end);
+  }
+  return out;
+}
+
+/**
  * Replace the TEXT content of the element carrying `data-slot="<name>"`.
  *
  * Returns null when no such element exists, so the caller can raise an error
@@ -566,11 +641,15 @@ function expandInto(
     const rev = store.get(componentId, revision);
     if (!rev) throw new ComponentNotFoundError(componentId, revision);
 
-    const { body, overridable } = applyOverrides(
+    const { body: overridden, overridable } = applyOverrides(
       rev.body,
       overridesOf(tag),
       componentId
     );
+    // Strip AFTER overrides resolve (slot targeting still needs the markers)
+    // and BEFORE regions are recorded, so every recorded offset indexes the
+    // same bytes the caller receives.
+    const body = stripSlotMarkers(overridden);
 
     const siblingIdx = siblingIndexOf(source, tag.start, comments);
     // `id@revision#siblingIndex`. The sibling index is what makes two INSTANCES

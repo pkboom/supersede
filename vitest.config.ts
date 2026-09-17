@@ -1,28 +1,17 @@
 /**
  * Repo-root Vitest config.
  *
- * Created by Lane H to support:
- *   - jsdom environment for `tests/unit/web.*.test.tsx` (per-file
- *     `// @vitest-environment jsdom` pragma still works; this just removes
- *     the burden of repeating it AND ensures DOM globals are available for
- *     React Testing Library at the right paths).
- *   - `@shared/*` alias resolution (mirrors `web/vite.config.ts`) so web
- *     components like `RightPanel.tsx` that import from `@shared/blocks/...`
- *     can be loaded by Vitest without bundler help.
- *
- * Server-side / pure-Node tests (the existing corpus) are unaffected: they
- * don't import the alias, and their default environment (`node`) is the
- * Vitest default — only files with the explicit pragma flip to jsdom.
+ * Node-only since the browser UI was removed: there is no jsdom environment,
+ * no React plugin and no DOM setup file. What remains under test is the MJML
+ * parser/serializer and the component expander, both plain Node modules.
  */
 import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [react()],
   resolve: {
     alias: {
       "@shared": resolve(__dirname, "src/shared"),
@@ -30,16 +19,10 @@ export default defineConfig({
   },
   test: {
     // Collect ONLY the real suite. Without an explicit `include`, Vitest's
-    // default glob sweeps the whole repo and picks up throwaway probe files
-    // (e.g. `.plan/scratch/*.test.ts`), so the reported pass rate depends on
-    // whatever scratch work happens to be lying around. Phase 0 (§0.1).
+    // default glob sweeps the whole repo and picks up throwaway probe files,
+    // so the reported pass rate depends on whatever scratch work happens to
+    // be lying around.
     include: ["tests/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
-    // Default to node; per-file `// @vitest-environment jsdom` overrides for
-    // web component tests.
     environment: "node",
-    // Auto-cleanup React Testing Library DOM between tests. Loaded for every
-    // test file but only relevant inside jsdom — the `cleanup()` call is a
-    // no-op when document is undefined.
-    setupFiles: ["./tests/setup.web.ts"],
   },
 });

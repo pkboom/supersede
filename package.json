@@ -2,53 +2,28 @@
   "name": "email-design-system",
   "version": "0.0.1",
   "private": true,
-  "description": "Local single-user MJML email designer with Anthropic-API-driven Claude turns.",
+  "description": "Local single-user MJML email designer.",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "setup": "node scripts/setup.mjs",
-    "dev": "EMAIL_DESIGNER_DB_PATH=./data/dev.db concurrently -k -n web,api -c blue,green \"vite --config web/vite.config.ts\" \"tsx watch src/server/main.ts\"",
+    "setup": "node src/cli/setup.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "components": "tsx scripts/component-slice.ts",
-    "measure": "tsx scripts/measure-templates.ts"
+    "typecheck": "tsc --noEmit",
+    "components": "tsx src/cli/component-slice.ts",
+    "measure": "tsx src/cli/measure-templates.ts",
+    "handover": "tsx src/cli/handover.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.0",
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^7.0.2",
-    "@hono/node-server": "^1",
-    "ai": "^4.0.0",
-    "better-sqlite3": "^12.0.0",
-    "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^4.5.6",
-    "hono": "^4",
-    "lucide-react": "^1.11.0",
-    "mjml": "^4.18.0",
-    "react-router-dom": "^6.28.0",
-    "zod": "^3.23.0"
+    "mjml": "^4.18.0"
   },
   "devDependencies": {
-    "@testing-library/react": "^14",
-    "@testing-library/user-event": "^14",
-    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
-    "@vitejs/plugin-react": "^4",
-    "concurrently": "^9.2.1",
-    "drizzle-kit": "^0.31.0",
     "fast-check": "^3",
-    "jsdom": "^24",
-    "react": "^18",
-    "react-dom": "^18",
     "tsx": "^4",
     "typescript": "^5.4",
-    "vite": "^5",
     "vitest": "^1"
   }
 }

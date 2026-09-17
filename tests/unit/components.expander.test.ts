@@ -446,6 +446,87 @@ describe("expand — overrides (ov-*)", () => {
     expect(regions[0]!.overridable.has("ov-slot-headline")).toBe(true);
   });
 
+  it("strips the data-slot marker from expanded output when the slot IS overridden", () => {
+    // The marker is authoring metadata for the stored body. mjml rejects it
+    // ("Attribute data-slot is illegal") and it is a visible trace of the tool
+    // in a file the customer is told is byte-identical to their own.
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/hero",
+      `<mj-section><mj-column><mj-text data-slot="headline">Default</mj-text></mj-column></mj-section>`
+    );
+    const { mjml } = expand(
+      template(`<mj-component component-id="brand/hero" revision="1" ov-slot-headline="Custom" />`),
+      s
+    );
+    expect(mjml).toContain("Custom");
+    expect(mjml).not.toContain("data-slot");
+  });
+
+  it("strips the data-slot marker even when the slot is NOT overridden", () => {
+    // The leak that matters most: a reference carrying no overrides never
+    // reaches replaceSlotText at all (applyOverrides returns early), so a fix
+    // confined to the override path would leak from exactly the templates
+    // that customised nothing.
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/hero",
+      `<mj-section><mj-column><mj-text data-slot="headline">Default</mj-text></mj-column></mj-section>`
+    );
+    const { mjml } = expand(
+      template(`<mj-component component-id="brand/hero" revision="1" />`),
+      s
+    );
+    expect(mjml).toContain("Default");
+    expect(mjml).not.toContain("data-slot");
+  });
+
+  it("removes ONLY the marker, leaving surrounding attribute formatting verbatim", () => {
+    // Excising the attribute text must not become a re-emit through
+    // renderOpenTag, which normalises quote style and collapses whitespace —
+    // that would trade this leak for a subtler one in any single-quoted or
+    // multi-line source file.
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/odd",
+      `<mj-section><mj-column><mj-text data-slot="h" color='#ff0000'   font-size="12px" >Hi</mj-text></mj-column></mj-section>`
+    );
+    const { mjml } = expand(
+      template(`<mj-component component-id="brand/odd" revision="1" />`),
+      s
+    );
+    expect(mjml).not.toContain("data-slot");
+    expect(mjml).toContain(`<mj-text color='#ff0000'   font-size="12px" >Hi</mj-text>`);
+  });
+
+  it("does not touch a data-slot substring occurring inside another attribute value", () => {
+    const s = new InMemoryComponentStore();
+    s.publish(
+      "brand/txt",
+      `<mj-section><mj-column><mj-text alt="data-slot=notreal">x</mj-text></mj-column></mj-section>`
+    );
+    const { mjml } = expand(
+      template(`<mj-component component-id="brand/txt" revision="1" />`),
+      s
+    );
+    expect(mjml).toContain(`alt="data-slot=notreal"`);
+  });
+
+  it("expanded output with a slot passes mjml STRICT validation", () => {
+    // plain-export/ is the deliverable that fails if the marker survives:
+    // mjml throws at strict validation rather than rendering.
+    const s = new InMemoryComponentStore();
+    // Body must be legal where template() puts it — inside <mj-column>.
+    s.publish("brand/line", `<mj-text data-slot="headline">Default</mj-text>`);
+    const { mjml } = expand(
+      template(`<mj-component component-id="brand/line" revision="1" ov-slot-headline="Custom" />`),
+      s
+    );
+    const soft = mjml2html(mjml, { validationLevel: "soft" });
+    expect(soft.errors ?? []).toHaveLength(0);
+    expect(() => mjml2html(mjml, { validationLevel: "strict" })).not.toThrow();
+  });
+
   it("throws when a slot override targets a slot that does not exist", () => {
     const s = new InMemoryComponentStore();
     s.publish("brand/hero", `<mj-section><mj-column><mj-text>x</mj-text></mj-column></mj-section>`);

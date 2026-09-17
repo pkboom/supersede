@@ -6,7 +6,7 @@
 >
 > Setup: `npm run dev` from the project root. Open `http://localhost:5173`.
 
-## Sign-off — 11 binary items
+## Sign-off — 7 binary items
 
 ```
 [ ] `npm run dev`; visit http://localhost:5173 → redirects to /templates;
@@ -27,25 +27,6 @@
     Wait for SaveStatusIndicator to show "Saved"; refresh → new text
     persists. (Refreshing before "Saved" loses the edit; that is
     expected v2 behavior.)
-
-[ ] Open Settings; switch the model from the dropdown; refresh; the new
-    model is shown as the default in the dropdown.
-
-[ ] With ANTHROPIC_API_KEY UNSET, send a query → 412 banner appears
-    with the env-var message; canvas is unaffected (no save status flip,
-    no MJML change).
-
-[ ] In Settings, flip Mode to "Claude CLI" (radio). API-key banner
-    disappears even while ANTHROPIC_API_KEY remains unset.
-    Pre-req: `which claude` resolves and `claude auth login` is configured.
-    Send a query → spinner; iframe updates with the CLI's MJML; reply
-    text appears under the prompt; no 412. Flip Mode back to "API key";
-    banner returns until the env var is set.
-
-[ ] Set ANTHROPIC_API_KEY; restart server; send a query → spinner
-    appears; iframe updates with Claude's new MJML; reply text appears
-    under the prompt; SaveStatusIndicator stays clean (no spurious
-    Saving…/Saved cycle, because cancelPendingSave fired before POST).
 
 [ ] Open the same template in two tabs; edit in tab A and wait for
     "Saved"; edit in tab B and wait — tab B sees a conflict toast;
