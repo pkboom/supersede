@@ -1,42 +1,3 @@
-/**
- * blocks.roundTrip.property — the fidelity gate (plan §0.3).
- *
- * WHY THIS EXISTS, AND WHY IT IS N-GENERATION
- * -------------------------------------------
- * `blocks.passthrough.test.ts` is a *classification* smoke test: 6 hand-picked
- * literals, every assertion `normalizeWhitespace(out) === normalizeWhitespace(src)`,
- * and — decisively — **one generation only**. It never does
- * parse->serialize->parse->serialize.
- *
- * That is precisely why the entity double-escape bug (§0.2) survived: a single
- * round-trip normalizes `&amp;` -> `&amp;amp;` and *looks* fine under whitespace
- * normalization, because both sides are compared once. The corruption is only
- * visible when you iterate — it grows +4 characters per generation, forever,
- * once per save.
- *
- * So the invariant this file asserts is **idempotency**, not round-trip:
- *
- *     gen1 = serialize(parse(src))
- *     gen1 === gen2 === ... === genN                (N >= 4)
- *
- * The serializer is allowed to re-indent and re-format on the FIRST pass —
- * that is its job. What it may never do is keep changing the document on
- * subsequent passes. A serializer that reaches a fixpoint at gen1 is lossless
- * in the only sense that matters for a system that rewrites N templates
- * unattended.
- *
- * `assertRoundTrip` in roundTrip.ts had ZERO call sites before this file, and
- * `fast-check` was wired only to headEdit/attrsHelpers, never to the parser.
- *
- * SOURCE-REALISTIC VALUES
- * -----------------------
- * The parser runs fast-xml-parser with `processEntities: false`, so attribute
- * values and text arrive as the *literal source characters* — `&amp;` is five
- * characters, not `&`. Generators here therefore emit values as they would
- * legitimately appear in MJML source: entities stay encoded, and a raw `<` or a
- * raw `"` inside an attribute value is never generated because it cannot occur
- * in well-formed source.
- */
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 import { parseMjml, serializeMjml } from "../../src/shared/blocks/index.js";
@@ -47,11 +8,6 @@ import {
 
 const GENERATIONS = 5;
 
-/**
- * Run parse->serialize N times and return every generation. Index 0 is the
- * input; index 1 is the first serialized form; the fixpoint claim is about
- * indices 1..N.
- */
 function generations(src: string, n = GENERATIONS): string[] {
   const out: string[] = [src];
   let cur = src;
@@ -62,17 +18,11 @@ function generations(src: string, n = GENERATIONS): string[] {
   return out;
 }
 
-/**
- * The gate. Asserts the serializer reaches a fixpoint at gen1 and stays there
- * for N generations, reporting the first divergent generation with a diff that
- * points at the actual drift rather than dumping two whole documents.
- */
 function assertIdempotent(src: string, n = GENERATIONS): void {
   const gens = generations(src, n);
   const fixpoint = gens[1]!;
   for (let i = 2; i < gens.length; i++) {
     if (gens[i] !== fixpoint) {
-      // Locate the first differing offset so the failure names the drift.
       let at = 0;
       while (at < fixpoint.length && fixpoint[at] === gens[i]![at]) at++;
       throw new Error(
@@ -85,11 +35,6 @@ function assertIdempotent(src: string, n = GENERATIONS): void {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Adversarial corpus — values that actually occur in production email and that
-// the previous single-generation test never exercised.
-// ---------------------------------------------------------------------------
 
 const ADVERSARIAL_ATTR_VALUES: Array<[string, string]> = [
   ["ampersand entity", "a&amp;b"],
@@ -161,8 +106,6 @@ describe("§0.3 fidelity gate — N-generation idempotency", () => {
   });
 
   describe("attribute VALUES survive unchanged, not just the document shape", () => {
-    // Document-level idempotency can in principle be reached while a value is
-    // still being mangled once. Assert the parsed value itself is stable.
     for (const [label, value] of ADVERSARIAL_ATTR_VALUES) {
       it(`href=${label} parses back to the same value every generation`, () => {
         const read = (s: string): string | undefined => {
@@ -175,10 +118,6 @@ describe("§0.3 fidelity gate — N-generation idempotency", () => {
           return button.attrs?.get("href");
         };
         const gens = generations(buttonWith("href", value));
-        // Compare gen1 against the INPUT, not against itself. Comparing later
-        // generations to gen1 only re-establishes what assertIdempotent already
-        // proves — it cannot see a value mangled exactly once and then stable,
-        // which is the precise shape of the bug this block exists to catch.
         expect(read(gens[1]!), "generation 1 vs input").toBe(value);
         for (let i = 2; i < gens.length; i++) {
           expect(read(gens[i]!), `generation ${i}`).toBe(value);
@@ -235,15 +174,8 @@ describe("§0.3 fidelity gate — N-generation idempotency", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Generated property tests.
-// ---------------------------------------------------------------------------
-
-/** Attribute values as they legitimately appear in MJML source. */
 const attrValueArb: fc.Arbitrary<string> = fc.oneof(
   fc.constantFrom(...ADVERSARIAL_ATTR_VALUES.map(([, v]) => v)),
-  // Safe printable characters only: no raw `"` or `<`, which cannot appear
-  // unescaped in a well-formed attribute value.
   fc.stringOf(
     fc.constantFrom(
       ..."abcXYZ019 -_.:/#%?=+,()[]{}!@$*^~|".split(""),
@@ -257,7 +189,6 @@ const attrValueArb: fc.Arbitrary<string> = fc.oneof(
   fc.constant("&quot;q&quot;")
 );
 
-/** Text content as it legitimately appears in MJML source. */
 const textArb: fc.Arbitrary<string> = fc.oneof(
   fc.constantFrom(...ADVERSARIAL_TEXT.map(([, v]) => v)),
   fc.stringOf(
@@ -285,8 +216,6 @@ const attrNameArb: fc.Arbitrary<string> = fc.constantFrom(
 const attrsArb: fc.Arbitrary<string> = fc
   .array(fc.tuple(attrNameArb, attrValueArb), { maxLength: 5 })
   .map((pairs) => {
-    // De-duplicate names so generated source stays well-formed; duplicate-attr
-    // handling is covered by an explicit literal in the structural corpus.
     const seen = new Set<string>();
     const parts: string[] = [];
     for (const [k, v] of pairs) {
@@ -321,22 +250,6 @@ const documentArb: fc.Arbitrary<string> = fc
   .array(sectionArb, { minLength: 0, maxLength: 3 })
   .map((secs) => `<mjml><mj-body>${secs.join("")}</mj-body></mjml>`);
 
-/**
- * Put a generated source into the serializer's own normal form for EMPTY
- * elements, so a single-round-trip comparison is testing fidelity rather than
- * formatting.
- *
- * The normal form is not uniform, and the distinction is load-bearing:
- *   - a container with no children     -> `<mj-section />`     (self-closing)
- *   - a text leaf with `text != null`  -> `<mj-text></mj-text>` (stays PAIRED,
- *     even when the text is empty, because `serializeBlock` takes the
- *     contentField branch whenever `text` is non-null)
- *   - a leaf with no text              -> `<mj-image />`        (self-closing)
- *
- * So `mj-text` / `mj-button` are excluded here: an empty one is ALREADY in
- * normal form, and collapsing it would introduce the very mismatch this helper
- * exists to remove.
- */
 const PAIRED_WHEN_EMPTY = new Set(["mj-text", "mj-button"]);
 
 function canonicalizeEmptyElements(src: string): string {
@@ -353,16 +266,6 @@ function canonicalizeEmptyElements(src: string): string {
   return out;
 }
 
-/**
- * Documents whose text leaves are never empty.
- *
- * Needed for the indentation property below: that test simulates re-indenting a
- * document by expanding every `><` into `>\n  <`, which is only a *whitespace*
- * change when the gap really is between two tags. For an empty `<mj-text></mj-text>`
- * the same expansion injects whitespace INSIDE preserved text content, which
- * `normalizeWhitespace` is contractually required to keep — so the inputs stop
- * being equivalent and the test would be asserting the wrong thing.
- */
 const nonEmptyTextArb: fc.Arbitrary<string> = fc.oneof(
   fc.constantFrom(
     ...ADVERSARIAL_TEXT.filter(([, v]) => v.trim().length > 0).map(([, v]) => v)
@@ -393,27 +296,6 @@ const nonEmptyDocumentArb: fc.Arbitrary<string> = fc
   )
   .map((secs) => `<mjml><mj-body>${secs.join("")}</mj-body></mjml>`);
 
-// ---------------------------------------------------------------------------
-// THE WRITE PATH.
-//
-// Everything above generates SOURCE-realistic values, on the stated reasoning
-// that a raw `<` or `"` "cannot occur in well-formed source". That is true, and
-// it is exactly why the first attempt at the §0.2 fix shipped a worse bug than
-// the one it fixed: `node.text` and `attrs` are also written PROGRAMMATICALLY,
-// and those writers hold raw characters.
-//
-//   - the inline canvas editor assigns `target.textContent` verbatim
-//   - the properties form assigns raw input values
-//   - the component expander assigns `ov-*` values
-//
-// With text escaping removed, typing `a < b` serialized to `<mj-text>a < b</mj-text>`,
-// which re-parsed to `"a "` — silently truncated, then persisted. The gate could
-// not see it because its corpus was scoped around the hole.
-//
-// So these cases enter through assignment, not through parsing. A fix that only
-// satisfies the source corpus does not satisfy this one.
-// ---------------------------------------------------------------------------
-
 const SEED = `<mjml><mj-body><mj-section><mj-column><mj-text>seed</mj-text><mj-button href="#">seed</mj-button></mj-column></mj-section></mj-body></mjml>`;
 
 function leafOf(doc: ReturnType<typeof parseMjml>, index: 0 | 1) {
@@ -425,7 +307,6 @@ function leafOf(doc: ReturnType<typeof parseMjml>, index: 0 | 1) {
   };
 }
 
-/** Decode the entities a browser would, to check what the user actually sees. */
 function asDisplayed(v: string): string {
   return v
     .replace(/&lt;/g, "<")
@@ -452,14 +333,12 @@ describe("§0.3 fidelity gate — the programmatic WRITE path", () => {
       leafOf(doc, 0).text = raw;
       const emitted = serializeMjml(doc);
       const readBack = leafOf(parseMjml(emitted), 0).text ?? "";
-      // The user must see back exactly what they typed.
       expect(asDisplayed(readBack)).toBe(raw);
     });
 
     it(`text assigned raw (${label}) is then idempotent`, () => {
       const doc = parseMjml(SEED);
       leafOf(doc, 0).text = raw;
-      // Once written, the document must be a fixpoint like any other.
       assertIdempotent(serializeMjml(doc));
     });
 
@@ -479,12 +358,10 @@ describe("§0.3 fidelity gate — the programmatic WRITE path", () => {
   }
 
   it("a raw < in text cannot truncate the document", () => {
-    // The specific regression: everything after `<` was destroyed.
     const doc = parseMjml(SEED);
     leafOf(doc, 0).text = "a < b";
     const out = serializeMjml(doc);
     expect(leafOf(parseMjml(out), 0).text).toBe("a &lt; b");
-    // And the sibling button must still be there — truncation ate it before.
     expect(leafOf(parseMjml(out), 1)).toBeDefined();
   });
 
@@ -494,22 +371,15 @@ describe("§0.3 fidelity gate — the programmatic WRITE path", () => {
     const reparsed = parseMjml(serializeMjml(doc));
     const section = reparsed.body[0] as { children?: unknown[] };
     const column = section.children?.[0] as { children?: unknown[] };
-    // Still exactly the two leaves we started with — nothing was injected.
     expect(column.children).toHaveLength(2);
   });
 
   it("KNOWN LIMIT: a typed literal entity is read back as that entity", () => {
-    // Idempotent escaping cannot distinguish "the user typed &amp;" from "this
-    // value came from source and already holds an entity". We resolve the
-    // ambiguity in favour of source, because source documents containing
-    // entities are universal and typing a literal entity into a WYSIWYG field
-    // is vanishingly rare — and the alternative (escaping every `&`) is exactly
-    // the compounding §0.2 corruption.
     const doc = parseMjml(SEED);
     leafOf(doc, 0).text = "a &amp; b";
     const readBack = leafOf(parseMjml(serializeMjml(doc)), 0).text;
     expect(readBack).toBe("a &amp; b");
-    expect(asDisplayed(readBack!)).toBe("a & b"); // displays as `&`, not `&amp;`
+    expect(asDisplayed(readBack!)).toBe("a & b");
   });
 });
 
@@ -526,17 +396,6 @@ describe("§0.3 fidelity gate — generated documents", () => {
   it("a single round-trip preserves the document modulo whitespace", () => {
     fc.assert(
       fc.property(documentArb, (src) => {
-        // This is the weaker, pre-existing invariant. Kept because it catches
-        // structural loss that idempotency alone would not (a serializer that
-        // drops everything is trivially idempotent).
-        //
-        // Empty elements are canonicalized first: the serializer deliberately
-        // emits `<mj-body />` for a source `<mj-body></mj-body>`, and likewise
-        // for any childless container or text-less leaf. That is a normal form,
-        // not a loss — it reaches a fixpoint at generation 1 and the idempotency
-        // gate above covers it — but it means raw `assertRoundTrip` does NOT
-        // hold for empty elements. Asserting it unmodified here would be
-        // asserting something untrue about the code.
         assertRoundTrip(canonicalizeEmptyElements(src));
       }),
       { numRuns: 400 }
@@ -547,8 +406,6 @@ describe("§0.3 fidelity gate — generated documents", () => {
     fc.assert(
       fc.property(documentArb, (src) => {
         const out = serializeMjml(parseMjml(src));
-        // Guard against the degenerate serializer that satisfies idempotency
-        // by emitting nothing.
         const countTags = (s: string): number =>
           (s.match(/<mj-(section|column|text|button|image|divider|spacer)\b/g) ?? [])
             .length;
@@ -558,12 +415,6 @@ describe("§0.3 fidelity gate — generated documents", () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// normalizeWhitespace — every fidelity assertion in the suite routes through
-// this function, and before this block it had no test of its own. Its own
-// comments document two off-by-one bugs already fixed in it.
-// ---------------------------------------------------------------------------
 
 describe("§0.3 — normalizeWhitespace has its own tests", () => {
   it("strips whitespace strictly between tags", () => {
@@ -590,23 +441,10 @@ describe("§0.3 — normalizeWhitespace has its own tests", () => {
   });
 
   it("handles a close tag immediately followed by a sibling close tag", () => {
-    // The documented boundary bug: `lastIndexOf("<", ...)` could match the
-    // SIBLING's `<` instead of the in-match close tag, over-extending the
-    // protected range.
-    //
-    // The obvious fixture — `<mj-column><mj-text>hi</mj-text></mj-column>` —
-    // does NOT discriminate: the over-wide range swallows `</mj-text>` verbatim,
-    // and since that span holds no collapsible whitespace the output is
-    // byte-identical under both the buggy and fixed versions. A regression test
-    // that passes against the bug it is named for is worse than none, so the
-    // fixture below puts collapsible whitespace where the erroneous extension
-    // would reach.
     const src = `<mj-column><mj-text>hi</mj-text></mj-column>\n  <mj-column>\n    <mj-text>  a  b  </mj-text>\n  </mj-column>`;
     const out = normalizeWhitespace(src);
-    // Inner text whitespace preserved in BOTH protected ranges...
     expect(out).toContain(">  a  b  <");
     expect(out).toContain(">hi<");
-    // ...and the inter-tag whitespace between the two columns is gone.
     expect(out).toContain("</mj-column><mj-column>");
   });
 

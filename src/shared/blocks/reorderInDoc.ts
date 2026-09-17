@@ -1,54 +1,8 @@
-/**
- * reorderInDoc — pure helper for H5 drag-to-reorder of overlay blocks.
- *
- * Moves the node at `sourcePath` so it is inserted immediately AFTER the node
- * at `overPath`, returning a new MjmlDocument. Returns null if the move is
- * invalid (cycle, missing path, target parent rejects the source's type).
- *
- * Constraints:
- *   - structuredClone is used so the returned doc shares no mutable state
- *     (BlockNode.attrs is a Map<string,string>; structuredClone preserves it,
- *     JSON round-trip would not).
- *   - Cycle prevention: if `sourcePath` is a strict prefix of `overPath`,
- *     dropping the source into its own descendant would create a cycle —
- *     return null.
- *   - Validity: `BLOCK_REGISTRY[parentType].allowedChildren` must include the
- *     source's block type (skipped for unknown / mj-custom-passthrough nodes,
- *     which carry no canonical block-type for the registry to gate on).
- *
- * Path-arithmetic note (architect NEW-1):
- *   When the source's parent is an ancestor of `overPath`, splicing the source
- *   out of its parent shifts the indices of its right-siblings down by 1 —
- *   `overPath` must be adjusted before the second walk.
- *
- *   Predicate:
- *     let i = sourcePath.length - 1
- *     adjust overPath[i] iff
- *       overPath.length > i
- *       AND overPath.slice(0, i).every((v, j) => v === sourcePath[j])
- *       AND overPath[i] > sourcePath[i]
- *
- *   Example: sourcePath = [0, 0, 1], overPath = [0, 0, 3]
- *     - share parent [0, 0]
- *     - i = 2; overPath[2] = 3 > sourcePath[2] = 1
- *     - adjusted overPath = [0, 0, 2]
- *
- *   Counter-examples (no adjust):
- *     - sourcePath = [0, 0, 1], overPath = [0, 1] — different parent at depth 1.
- *     - sourcePath = [0, 0, 1], overPath = [0, 1, 0] — share only [0]; the
- *       splice does not touch overPath[1].
- *     - sourcePath = [0, 0, 3], overPath = [0, 0, 1] — overPath index is
- *       already to the LEFT of source, so splice doesn't shift it.
- */
 import { BLOCK_REGISTRY } from "./registry.js";
 import type { MjmlDocument, TreeNode } from "./types.js";
 import { isBlockNode } from "./types.js";
 
-/**
- * Walk to the children-array of the parent of `path`. Returns `body` itself
- * for top-level paths. Returns null if any intermediate node is missing or
- * not a container.
- */
+/** `body` itself for a top-level path; null if the walk hits a non-container. */
 function walkToParentArr(
   body: TreeNode[],
   path: number[]
@@ -65,10 +19,6 @@ function walkToParentArr(
   return arr;
 }
 
-/**
- * Resolve the block-typed parent at `parentPath` against `body`, or null for
- * a top-level path (parentPath = []).
- */
 function resolveParentBlock(
   body: TreeNode[],
   parentPath: number[]
@@ -88,23 +38,14 @@ function resolveParentBlock(
   return cur ?? null;
 }
 
-/**
- * Returns true if the move is allowed by BLOCK_REGISTRY.allowedChildren of the
- * target parent. Top-level drops (parentPath = []) only allow `mj-section` per
- * the implicit body-children invariant. Unknown / passthrough source nodes are
- * not gated (we can't reason about their block-type).
- */
 function isAllowedChild(
   body: TreeNode[],
   parentPath: number[],
   source: TreeNode
 ): boolean {
-  if (!isBlockNode(source)) return true; // unknown / passthrough — no gate.
-
-  if (parentPath.length === 0) {
-    // Top-level body only accepts mj-section.
-    return source.type === "mj-section";
-  }
+  // Passthrough and unknown nodes carry no block type to gate on.
+  if (!isBlockNode(source)) return true;
+  if (parentPath.length === 0) return source.type === "mj-section";
   const parent = resolveParentBlock(body, parentPath);
   if (!parent || !isBlockNode(parent)) return false;
   const def = BLOCK_REGISTRY[parent.type];
@@ -113,10 +54,12 @@ function isAllowedChild(
 }
 
 /**
- * If sourcePath's parent is the same as overPath's prefix at depth
- * (sourcePath.length - 1) AND overPath's index at that depth is greater than
- * sourcePath's last index, decrement overPath at that depth by 1 to account
- * for the splice.
+ * Splicing the source out shifts its right-siblings down by one, so an
+ * `overPath` to the right of it under the same parent has to come back by one.
+ *
+ *   [0,0,1] over [0,0,3] -> [0,0,2]   same parent, over is to the right
+ *   [0,0,1] over [0,1,0] -> unchanged  they share only [0]
+ *   [0,0,3] over [0,0,1] -> unchanged  over is already to the left
  */
 function adjustOverPath(
   overPath: number[],
@@ -141,8 +84,7 @@ export function reorderInDoc(
 ): MjmlDocument | null {
   if (sourcePath.length === 0 || overPath.length === 0) return null;
 
-  // Cycle prevention: source is a strict prefix of over → would drop a node
-  // into its own descendant.
+  // A source that prefixes `over` would be dropped into its own descendant.
   if (sourcePath.length <= overPath.length) {
     let isPrefix = true;
     for (let i = 0; i < sourcePath.length; i++) {
@@ -154,10 +96,9 @@ export function reorderInDoc(
     if (isPrefix) return null;
   }
 
-  // structuredClone preserves Map (attrs).
+  // structuredClone rather than a JSON round trip, which loses `attrs`.
   const cloned = structuredClone(doc.body) as TreeNode[];
 
-  // 1) Detach source.
   const sourceParentArr = walkToParentArr(cloned, sourcePath);
   if (!sourceParentArr) return null;
   const sourceIdx = sourcePath[sourcePath.length - 1]!;
@@ -165,25 +106,18 @@ export function reorderInDoc(
   const moved = sourceParentArr[sourceIdx];
   if (!moved) return null;
 
-  // 2) Compute adjusted overPath, then resolve target parent + index.
+  // Validated before the splice, so an invalid target leaves the doc untouched.
   const adjustedOverPath = adjustOverPath(overPath, sourcePath);
-  // Walk from the un-mutated body to validate the adjusted path resolves
-  // BEFORE we splice, so an invalid target leaves the doc untouched.
-  const overParentPath = adjustedOverPath.slice(0, -1);
+  if (!isAllowedChild(cloned, adjustedOverPath.slice(0, -1), moved)) return null;
 
-  // Validate target parent type allows source's block type.
-  if (!isAllowedChild(cloned, overParentPath, moved)) return null;
-
-  // 3) Splice out source.
   sourceParentArr.splice(sourceIdx, 1);
 
-  // 4) Resolve target parent's children-array AFTER the splice (paths shifted).
+  // Re-walked after the splice, which shifted the paths.
   const overParentArr = walkToParentArr(cloned, adjustedOverPath);
   if (!overParentArr) return null;
   const overIdx = adjustedOverPath[adjustedOverPath.length - 1]!;
   if (overIdx < 0 || overIdx >= overParentArr.length) return null;
 
-  // 5) Insert AFTER over.
   overParentArr.splice(overIdx + 1, 0, moved);
 
   return { ...doc, body: cloned };

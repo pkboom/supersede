@@ -1,25 +1,3 @@
-/**
- * MJML → block-tree parser. *Lossless or fail-closed.*
- *
- * Strategy
- * --------
- * fast-xml-parser produces a structural skeleton with `preserveOrder: true`.
- * For any subtree we cannot model (mj-raw, mj-include, comments, unmodeled
- * tags, even modeled tags carrying attrs/children that don't fit our schema),
- * we capture the *original input substring* via a small balanced-tag walker
- * implemented over the raw source string. The captured slice is byte-equal
- * to the input — that's what gives us round-trip fidelity at the
- * fail-closed layer.
- *
- * Why both layers? fast-xml-parser does not expose byte offsets, so we
- * cannot ask it for "the slice that produced this node." We can, however,
- * walk the raw string ourselves with a forgiving tag scanner that tracks
- * `<mj-...>`/`</mj-...>` pairs and self-closing tags. The structural
- * skeleton tells us *what* to model; the raw walker tells us *what slice*
- * to preserve when we can't model.
- *
- * Trade-offs documented in the file head per plan request.
- */
 import { XMLParser } from "fast-xml-parser";
 import {
   BLOCK_REGISTRY,
@@ -40,40 +18,31 @@ function nid(): string {
   return `n_${__id.toString(36)}`;
 }
 
-// ----- Raw walker (byte-exact subtree extraction) -----
-
 interface RawTag {
-  /** Tag name including any namespace. */
   name: string;
-  /** Inclusive byte offsets into the source string. */
   start: number;
-  /** Exclusive end of the matched tag (whole element including children + close). */
+  /** Exclusive end of the whole element, children and close tag included. */
   end: number;
-  /** True if `<foo />` self-closing or `<foo>` immediately followed by `</foo>`. */
   selfClosing: boolean;
 }
 
 const TAG_OPEN_RE = /<\s*([A-Za-z][\w-]*)\b/g;
 
 /**
- * Find the byte slice that contains the *element* starting at `from`.
- * Handles `<foo .../>`, `<foo></foo>`, comments, CDATA-like content,
- * and nested same-named tags by tracking depth.
+ * The byte slice of the element starting at `from`. fast-xml-parser exposes no
+ * offsets, so unmodeled subtrees are captured by walking the raw string here —
+ * that verbatim slice is what makes the round trip lossless.
  */
 function readElement(src: string, from: number): RawTag | null {
-  // Skip leading whitespace inside the search window? Caller controls `from`.
   TAG_OPEN_RE.lastIndex = from;
   const m = TAG_OPEN_RE.exec(src);
   if (!m) return null;
-  if (m.index !== from && /\S/.test(src.slice(from, m.index))) {
-    // There is non-whitespace text before the next tag — caller should treat
-    // that as text, not as an element.
-    return null;
-  }
+  // Non-whitespace before the next tag is text, not an element.
+  if (m.index !== from && /\S/.test(src.slice(from, m.index))) return null;
   const name = m[1]!;
   const tagOpenStart = m.index;
 
-  // Find end of the open tag (the first '>' that isn't inside a quoted attribute).
+  // The first '>' that isn't inside a quoted attribute value.
   let i = TAG_OPEN_RE.lastIndex;
   let inSingle = false;
   let inDouble = false;
@@ -103,15 +72,12 @@ function readElement(src: string, from: number): RawTag | null {
     return { name, start: tagOpenStart, end: openEnd, selfClosing: true };
   }
 
-  // Walk children counting same-named open/close tags.
   let depth = 1;
   let cursor = openEnd;
-  // Negative lookahead `(?![\w-])` is mandatory here — `\b` matches between a
-  // word char and `-`, so `<mj-social\b` would falsely match `<mj-social-element`
-  // and over-increment depth when a tag name is a prefix of another's.
+  // `(?![\w-])` rather than `\b`, which matches between a word char and `-`:
+  // `<mj-social\b` would otherwise match `<mj-social-element` and over-count.
   const openRe = new RegExp(`<\\s*${escapeRe(name)}(?![\\w-])`, "g");
   const closeRe = new RegExp(`<\\s*\\/\\s*${escapeRe(name)}\\s*>`, "g");
-  // Skip comments ranges so an `<!-- <foo> -->` doesn't mess up depth.
   while (cursor < src.length) {
     const nextComment = src.indexOf("<!--", cursor);
     const nextOpen = ((): number => {
@@ -125,7 +91,7 @@ function readElement(src: string, from: number): RawTag | null {
       return r ? r.index : -1;
     })();
 
-    // Skip past comments before considering tag matches inside them.
+    // A tag inside `<!-- ... -->` must not move the depth counter.
     if (
       nextComment !== -1 &&
       (nextOpen === -1 || nextComment < nextOpen) &&
@@ -158,12 +124,7 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Read a single comment `<!-- ... -->` starting at `from` (or skip whitespace
- * to find one immediately). Returns the comment slice end on match.
- */
 function readComment(src: string, from: number): { start: number; end: number } | null {
-  // Skip leading whitespace.
   let i = from;
   while (i < src.length && /\s/.test(src[i]!)) i++;
   if (src.slice(i, i + 4) !== "<!--") return null;
@@ -171,8 +132,6 @@ function readComment(src: string, from: number): { start: number; end: number } 
   if (end === -1) return null;
   return { start: i, end: end + 3 };
 }
-
-// ----- Structural parser -----
 
 const xmlParser = new XMLParser({
   preserveOrder: true,
@@ -186,9 +145,7 @@ const xmlParser = new XMLParser({
 });
 
 type FxpAttrMap = { [attr: string]: string };
-// FxpNode is an index-signature type; the optional ":@" key holds attributes.
-// We use unknown for the index to avoid the conflicting property type error
-// when TypeScript checks ":@" against the index signature.
+/** fast-xml-parser's `preserveOrder` shape; the `:@` key holds attributes. */
 type FxpNode = {
   [tag: string]: FxpNode[] | string | FxpAttrMap | undefined;
   ":@"?: FxpAttrMap;
@@ -203,11 +160,8 @@ function getTagName(node: FxpNode): string | null {
 }
 
 /**
- * Build the attrs Map in source order (A-prime). We iterate the `:@` object's
- * keys via `Object.keys()` and `.set()` into a fresh Map. Per ES2015+ spec,
- * `Object.keys` returns string keys in insertion order — but for numeric-like
- * keys (e.g. `data-1="x"`), V8 sorts those to the front. Map preserves the
- * order we feed it regardless of key shape, which closes that hole.
+ * A Map rather than the plain object, because V8 sorts numeric-like object
+ * keys (`data-1="x"`) to the front and the serializer emits this order.
  */
 function getAttrs(node: FxpNode): Map<string, string> {
   const out = new Map<string, string>();
@@ -221,22 +175,20 @@ function getAttrs(node: FxpNode): Map<string, string> {
   return out;
 }
 
+function passthrough(rawXml: string, originalTagName: string): CustomPassthroughNode {
+  return { id: nid(), type: "mj-custom-passthrough", rawXml, originalTagName };
+}
+
 function getChildren(node: FxpNode, tag: string): FxpNode[] {
   const v = node[tag];
   if (Array.isArray(v)) return v as FxpNode[];
   return [];
 }
 
-// ----- Body walker -----
-
 interface ParseContext {
   src: string;
 }
 
-/**
- * Parse the children of <mj-body>. We re-walk the raw string to preserve
- * byte-exact slices for unmodeled subtrees.
- */
 function parseBodyChildren(
   ctx: ParseContext,
   bodyInnerStart: number,
@@ -248,11 +200,9 @@ function parseBodyChildren(
   const src = ctx.src;
 
   while (cursor < bodyInnerEnd) {
-    // Skip pure whitespace.
     while (cursor < bodyInnerEnd && /\s/.test(src[cursor]!)) cursor++;
     if (cursor >= bodyInnerEnd) break;
 
-    // Comment?
     const cm = readComment(src, cursor);
     if (cm && cm.end <= bodyInnerEnd) {
       out.push({
@@ -265,10 +215,9 @@ function parseBodyChildren(
       continue;
     }
 
-    // Element?
     const el = readElement(src, cursor);
     if (!el || el.end > bodyInnerEnd) {
-      // Stray text — attach as an opaque node to keep round-trip.
+      // Stray text — opaque, so it still round-trips.
       const rest = src.slice(cursor, bodyInnerEnd);
       if (/\S/.test(rest)) {
         out.push({
@@ -300,49 +249,27 @@ function parseElement(
   const src = ctx.src;
   const elementSlice = src.slice(el.start, el.end);
 
-  // Unmodeled tag — preserve verbatim as a typed Custom MJML placeholder.
   if (!isModeledType(tag)) {
-    return {
-      id: nid(),
-      type: "mj-custom-passthrough",
-      rawXml: elementSlice,
-      originalTagName: tag,
-    } satisfies CustomPassthroughNode;
+    return passthrough(elementSlice, tag);
   }
 
   const def = BLOCK_REGISTRY[tag as BlockType];
 
-  // Parse this element through fast-xml-parser to extract attrs/children.
   let parsed: FxpNode[];
   try {
     parsed = xmlParser.parse(elementSlice) as FxpNode[];
   } catch {
-    return {
-      id: nid(),
-      type: "mj-custom-passthrough",
-      rawXml: elementSlice,
-      originalTagName: tag,
-    } satisfies CustomPassthroughNode;
+    return passthrough(elementSlice, tag);
   }
 
   if (!Array.isArray(parsed) || parsed.length !== 1) {
-    return {
-      id: nid(),
-      type: "mj-custom-passthrough",
-      rawXml: elementSlice,
-      originalTagName: tag,
-    } satisfies CustomPassthroughNode;
+    return passthrough(elementSlice, tag);
   }
 
   const fnode = parsed[0]!;
   const fname = getTagName(fnode);
   if (fname !== tag) {
-    return {
-      id: nid(),
-      type: "mj-custom-passthrough",
-      rawXml: elementSlice,
-      originalTagName: tag,
-    } satisfies CustomPassthroughNode;
+    return passthrough(elementSlice, tag);
   }
 
   const attrs = getAttrs(fnode);
@@ -350,16 +277,12 @@ function parseElement(
 
   const path = `${parentPath}/${tag}[${indexInParent}]`;
 
-  // Container blocks: walk children via the raw walker so unmodeled subtrees
-  // are captured byte-exactly. We walk the source range ourselves (rather
-  // than reusing parseBodyChildren) so we can demote individual children to
-  // `mj-custom-passthrough` when their type isn't in `allowedChildren`.
+  // Walked here rather than through `parseBodyChildren` so a child whose type
+  // is not in `allowedChildren` can be demoted individually.
   if (def.isContainer) {
     const openTagEnd = src.indexOf(">", el.start) + 1;
-    // `el.end` is exclusive (one past the `>` of the close tag). We must
-    // search for `</` strictly BEFORE `el.end`, otherwise `lastIndexOf` can
-    // match the OUTER element's `</` if its `<` happens to sit at index
-    // `el.end - 1` (e.g. tightly-packed siblings like `</a></b>`).
+    // Strictly before `el.end`, which is one past the close tag's `>`:
+    // otherwise tightly-packed siblings (`</a></b>`) match the outer `</`.
     const closeTagStart = el.selfClosing
       ? openTagEnd
       : src.lastIndexOf(`</`, el.end - 2);
@@ -369,11 +292,9 @@ function parseElement(
     let cursor = openTagEnd;
 
     while (cursor < closeTagStart) {
-      // Skip pure whitespace.
       while (cursor < closeTagStart && /\s/.test(src[cursor]!)) cursor++;
       if (cursor >= closeTagStart) break;
 
-      // Comment?
       const cm = readComment(src, cursor);
       if (cm && cm.end <= closeTagStart) {
         children.push({
@@ -402,19 +323,11 @@ function parseElement(
       }
 
       const childSlice = src.slice(childEl.start, childEl.end);
-      // If the child's tag is modeled but NOT in allowedChildren, demote it
-      // (but keep the container as a real BlockNode). This is the per-child
-      // demote path required by A-prime.
       if (
         isModeledType(childEl.name) &&
         !allowed.has(childEl.name as BlockType)
       ) {
-        children.push({
-          id: nid(),
-          type: "mj-custom-passthrough",
-          rawXml: childSlice,
-          originalTagName: childEl.name,
-        } satisfies CustomPassthroughNode);
+        children.push(passthrough(childSlice, childEl.name));
       } else {
         const childNode = parseElement(ctx, childEl, path, children.length);
         children.push(childNode);
@@ -430,22 +343,15 @@ function parseElement(
     } satisfies BlockNode;
   }
 
-  // Leaf blocks. If the element has nested element children at all, we don't
-  // model that — preserve verbatim as a typed Custom MJML passthrough.
+  // A leaf with element children is not something we model; keep it verbatim.
   const hasElementChild = childrenFx.some((c) => {
     const k = getTagName(c);
     return k && k !== "#text" && k !== "#comment";
   });
   if (hasElementChild) {
-    return {
-      id: nid(),
-      type: "mj-custom-passthrough",
-      rawXml: elementSlice,
-      originalTagName: tag,
-    } satisfies CustomPassthroughNode;
+    return passthrough(elementSlice, tag);
   }
 
-  // Pull text content if the registry says we have a contentField.
   let text: string | undefined;
   if (def.contentField === "text") {
     const textParts: string[] = [];
@@ -465,60 +371,28 @@ function parseElement(
   } satisfies BlockNode;
 }
 
-// ----- Top-level parse -----
-
-/**
- * Parse a full MJML document. The top-level structure (mj-head opaque,
- * mj-body decomposed) is captured separately so the serializer can re-emit
- * the document in the same shape.
- */
+/** Lossless: anything not modeled is kept as a verbatim source slice. */
 export function parseMjml(source: string): MjmlDocument {
   const mjmlOpenIdx = source.search(/<\s*mjml\b/i);
+  // No `<mjml>` root: the whole input is opaque.
   if (mjmlOpenIdx === -1) {
-    // No <mjml> root — the whole input is opaque MJML-ish content. Emit a
-    // single `mj-custom-passthrough` carrying the verbatim slice. (Per A-prime,
-    // tag-bearing slices that we can't model become passthrough; pure
-    // stray-text/comments-only inputs would also flow here, but the round-trip
-    // test corpus exercises only tag-bearing variants.)
-    return {
-      body: [
-        {
-          id: nid(),
-          type: "mj-custom-passthrough",
-          rawXml: source,
-          originalTagName: "",
-        } satisfies CustomPassthroughNode,
-      ],
-    };
+    return { body: [passthrough(source, "")] };
   }
 
   const docPreamble = source.slice(0, mjmlOpenIdx);
 
   const mjmlEl = readElement(source, mjmlOpenIdx);
   if (!mjmlEl) {
-    // Malformed `<mjml ...` open without a balanced close — treat as a
-    // tag-bearing opaque slice.
     return {
       docPreamble,
-      body: [
-        {
-          id: nid(),
-          type: "mj-custom-passthrough",
-          rawXml: source.slice(mjmlOpenIdx),
-          originalTagName: "mjml",
-        } satisfies CustomPassthroughNode,
-      ],
+      body: [passthrough(source.slice(mjmlOpenIdx), "mjml")],
     };
   }
 
-  // Capture <mjml ...attrs...> wrapper attrs as raw text between '<mjml'
-  // and '>' (without the 'mjml' name itself).
   const mjmlOpenEnd = source.indexOf(">", mjmlEl.start) + 1;
   const wrapperRaw = source.slice(mjmlEl.start, mjmlOpenEnd);
-  // wrapperRaw looks like "<mjml ...>" — strip leading "<mjml" and trailing ">".
   const rawWrapper = wrapperRaw.replace(/^<\s*mjml/i, "").replace(/>$/, "").trim();
 
-  // Walk inside <mjml>...</mjml> for mj-head + mj-body.
   let head: { rawXml: string } | undefined;
   let bodyAttrs: Map<string, string> | undefined;
   const body: TreeNode[] = [];
@@ -530,9 +404,8 @@ export function parseMjml(source: string): MjmlDocument {
     if (cursor >= innerEnd) break;
 
     const cm = readComment(source, cursor);
+    // Comments between head and body have no home of their own; body keeps them.
     if (cm && cm.end <= innerEnd) {
-      // Comments at this level: stash on whichever side hasn't been claimed.
-      // Practical choice: prepend to body as UnknownNode.
       body.push({
         id: nid(),
         type: "__unknown__",
@@ -550,13 +423,9 @@ export function parseMjml(source: string): MjmlDocument {
       head = { rawXml: source.slice(el.start, el.end) };
     } else if (el.name === "mj-body") {
       const openTagEnd = source.indexOf(">", el.start) + 1;
-      // Capture mj-body's own attributes via fast-xml-parser by parsing just
-      // the open tag as a self-closed element. We make a synthetic
-      // `<mj-body .../>` slice from the source open-tag substring so attribute
-      // extraction is identical to the structural parser path used for
-      // every other block — same insertion order semantics.
+      // Parsed as a synthetic self-closed tag, so mj-body's own attrs come out
+      // through the same path — and the same ordering — as every other block.
       const openTagSlice = source.slice(el.start, openTagEnd);
-      // For self-closed bodies (`<mj-body ... />`), reuse the slice as-is.
       const synthOpen = el.selfClosing
         ? openTagSlice
         : openTagSlice.replace(/>$/, " />");
@@ -571,8 +440,6 @@ export function parseMjml(source: string): MjmlDocument {
         bodyAttrs = new Map();
       }
 
-      // See note in parseElement about el.end - 2 — strictly-before search
-      // avoids matching the OUTER element's `</` for tightly-packed siblings.
       const closeTagStart = el.selfClosing
         ? openTagEnd
         : source.lastIndexOf("</", el.end - 2);
@@ -586,14 +453,7 @@ export function parseMjml(source: string): MjmlDocument {
           );
       body.push(...children);
     } else {
-      // Unmodeled top-level child of mjml — preserve as a typed Custom MJML
-      // passthrough (tag-bearing slice).
-      body.push({
-        id: nid(),
-        type: "mj-custom-passthrough",
-        rawXml: source.slice(el.start, el.end),
-        originalTagName: el.name,
-      } satisfies CustomPassthroughNode);
+      body.push(passthrough(source.slice(el.start, el.end), el.name));
     }
     cursor = el.end;
   }

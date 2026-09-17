@@ -1,12 +1,3 @@
-/**
- * The measurement harness drives a decision that can invalidate the whole
- * reference model (§11 experiment (b) re-opens D-2), so its arithmetic is
- * tested rather than trusted.
- *
- * These tests use FIXTURES WITH KNOWN ANSWERS. That matters more than usual
- * here: a measurement tool that is quietly wrong is worse than no tool, because
- * it produces a number people then stop questioning.
- */
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -14,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 function measure(files: Record<string, string>): {
-  experimentB: {
+  overrideVariance: {
     meanDifferingAttrsPerInstance: number;
     belowRootShare: number;
-    reopensD2: boolean;
+    overridesInsufficient: boolean;
     shapes: Array<{ shape: string; instances: number; meanDiffering: number }>;
   };
   reachability: {
@@ -55,7 +46,6 @@ describe("§3.5 reachability counting", () => {
         `<mj-section><mj-column><mj-text>plain</mj-text></mj-column></mj-section>`
       ),
     }).reachability;
-    // section + column + text = 3 modeled, 0 opaque
     expect(r.modeled).toBe(3);
     expect(r.opaque).toBe(0);
   });
@@ -66,7 +56,6 @@ describe("§3.5 reachability counting", () => {
         `<mj-wrapper><mj-section><mj-column><mj-text>x</mj-text></mj-column></mj-section></mj-wrapper>`
       ),
     }).reachability;
-    // The whole wrapper subtree collapses to ONE opaque node.
     expect(r.opaque).toBe(1);
     expect(r.opaqueBy["<mj-wrapper>"]).toBe(1);
   });
@@ -96,9 +85,9 @@ describe("§3.5 reachability counting", () => {
 describe("§11 experiment (b) variance", () => {
   it("reports zero variance for identical repeated blocks", () => {
     const block = `<mj-section background-color="#fff"><mj-column><mj-text>x</mj-text></mj-column></mj-section>`;
-    const b = measure({ "a.mjml": wrap(block + block) }).experimentB;
+    const b = measure({ "a.mjml": wrap(block + block) }).overrideVariance;
     expect(b.meanDifferingAttrsPerInstance).toBe(0);
-    expect(b.reopensD2).toBe(false);
+    expect(b.overridesInsufficient).toBe(false);
   });
 
   it("ignores a shape that occurs only once — it cannot vary", () => {
@@ -106,8 +95,7 @@ describe("§11 experiment (b) variance", () => {
       "a.mjml": wrap(
         `<mj-section><mj-column><mj-text>only one</mj-text></mj-column></mj-section>`
       ),
-    }).experimentB;
-    // Every shape here has exactly one instance, so nothing is comparable.
+    }).overrideVariance;
     expect(b.shapes.every((s) => s.instances >= 2)).toBe(true);
   });
 
@@ -116,46 +104,37 @@ describe("§11 experiment (b) variance", () => {
     const c = `<mj-button href="#" background-color="#222">Go</mj-button>`;
     const b = measure({
       "a.mjml": wrap(`<mj-section><mj-column>${a}${c}</mj-column></mj-section>`),
-    }).experimentB;
+    }).overrideVariance;
     const btn = b.shapes.find((s) => s.shape === "mj-button")!;
     expect(btn.instances).toBe(2);
     expect(btn.meanDiffering).toBeGreaterThan(0);
   });
 
   it("re-opens D-2 when root variance is high", () => {
-    // Eight attributes differing across two instances. Note the arithmetic:
-    // with two instances the modal value is whichever came first, so ONE
-    // instance matches it and the other differs on all eight — mean 4.0.
-    // Six differing attributes would land on exactly 3.0, which is the
-    // threshold itself and would make this test depend on the comparison being
-    // `>=` rather than `>`.
     const a = `<mj-button href="#" background-color="#1" color="#2" padding="1px" width="1px" align="left" border-radius="1px" font-size="1px" line-height="1px">Go</mj-button>`;
     const c = `<mj-button href="#" background-color="#9" color="#8" padding="9px" width="9px" align="right" border-radius="9px" font-size="9px" line-height="9px">Go</mj-button>`;
     const b = measure({
       "a.mjml": wrap(`<mj-section><mj-column>${a}${c}</mj-column></mj-section>`),
-    }).experimentB;
+    }).overrideVariance;
     expect(b.meanDifferingAttrsPerInstance).toBeGreaterThan(3);
-    expect(b.reopensD2).toBe(true);
+    expect(b.overridesInsufficient).toBe(true);
   });
 
   it("re-opens D-2 when differences are mostly BELOW the root", () => {
-    // This is the case the average alone cannot catch, and the reason the
-    // second measurement exists: the roots are identical, so a root-only
-    // metric reports zero variance while flat ov-* still cannot express it.
     const s1 = `<mj-section><mj-column><mj-button href="https://a.test">Go</mj-button></mj-column></mj-section>`;
     const s2 = `<mj-section><mj-column><mj-button href="https://b.test">Go</mj-button></mj-column></mj-section>`;
-    const b = measure({ "a.mjml": wrap(s1 + s2) }).experimentB;
+    const b = measure({ "a.mjml": wrap(s1 + s2) }).overrideVariance;
     expect(b.belowRootShare).toBeGreaterThan(0.5);
-    expect(b.reopensD2).toBe(true);
+    expect(b.overridesInsufficient).toBe(true);
   });
 
   it("does NOT re-open D-2 for low root-level variance only", () => {
     const s1 = `<mj-section background-color="#111"><mj-column><mj-text>x</mj-text></mj-column></mj-section>`;
     const s2 = `<mj-section background-color="#222"><mj-column><mj-text>x</mj-text></mj-column></mj-section>`;
-    const b = measure({ "a.mjml": wrap(s1 + s2) }).experimentB;
+    const b = measure({ "a.mjml": wrap(s1 + s2) }).overrideVariance;
     expect(b.meanDifferingAttrsPerInstance).toBeLessThanOrEqual(3);
     expect(b.belowRootShare).toBeLessThanOrEqual(0.5);
-    expect(b.reopensD2).toBe(false);
+    expect(b.overridesInsufficient).toBe(false);
   });
 });
 
@@ -169,14 +148,12 @@ describe("harness behaviour", () => {
   });
 
   it("measures ACROSS files, not just within one", () => {
-    // Components are shared between templates, so variance has to be measured
-    // across the corpus or the experiment answers the wrong question.
     const block = (color: string) =>
       `<mj-section background-color="${color}"><mj-column><mj-text>x</mj-text></mj-column></mj-section>`;
     const b = measure({
       "a.mjml": wrap(block("#111")),
       "b.mjml": wrap(block("#222")),
-    }).experimentB;
+    }).overrideVariance;
     const sec = b.shapes.find((s) => s.shape.startsWith("mj-section"))!;
     expect(sec.instances).toBe(2);
   });

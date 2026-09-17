@@ -1,17 +1,9 @@
 /**
- * Produce the §4 handover for one migration job — with no server and no database.
- *
- * The paid workflow is files on a laptop (BUSINESS.md §3), so this compiles MJML
- * in-process rather than POSTing to `/api/render`. That removes SQLite, drizzle
- * and the HTTP round-trip from the job entirely; the server survives only for a
- * future browser UI.
- *
- * Layout, in and out:
+ * Produces the handover for one migration job. The paid workflow is files on a
+ * laptop, so MJML is compiled in-process — no server, no database.
  *
  *   <job>/
- *     components/<id>.mjml   component bodies; the path under components/ IS
- *                            the component-id (shoe-brand/footer.mjml ->
- *                            "shoe-brand/footer")
+ *     components/<id>.mjml   the path under components/ IS the component-id
  *     templates/*.mjml       the rewired templates, carrying <mj-component/>
  *     originals/*.mjml       (optional) the agency's untouched files
  *   ->
@@ -20,15 +12,11 @@
  *     proof/REPORT.md            per template: identical / differs, and why
  *     plain-export/<name>.mjml   expanded MJML, no references left
  *
- * Usage:
- *   npm run handover -- <job-dir>
- *   npm run handover -- <job-dir> --check   verify only, write nothing
+ *   npm run handover -- <job-dir> [--check]
  */
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
-// mjml ships an ESM/CJS hybrid; the default export is the compile function.
-// Typed in ../declarations.d.ts — there is no @types/mjml for v4.
 import mjml2html from "mjml";
 import {
   COMPONENT_TAG,
@@ -36,19 +24,11 @@ import {
   expand,
   ExpansionError,
 } from "../shared/components/index.js";
-
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-const c = {
-  dim: (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s),
-  bold: (s: string) => (useColor ? `\x1b[1m${s}\x1b[0m` : s),
-  red: (s: string) => (useColor ? `\x1b[31m${s}\x1b[0m` : s),
-  green: (s: string) => (useColor ? `\x1b[32m${s}\x1b[0m` : s),
-  yellow: (s: string) => (useColor ? `\x1b[33m${s}\x1b[0m` : s),
-};
+import { c } from "./term.js";
 
 class HandoverError extends Error {}
 
-/** Every .mjml under `dir`, recursively, as paths relative to `dir`. */
+/** Every .mjml under `dir`, recursively, relative to `dir`. */
 function mjmlFilesUnder(dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
@@ -62,16 +42,11 @@ function mjmlFilesUnder(dir: string): string[] {
   return out.sort();
 }
 
-/**
- * Compile one template to HTML, refusing the two failures that would otherwise
- * ship silently. Both are lifted from `src/server/routes/render.ts`, where they
- * guarded the same compile behind HTTP status codes.
- */
+/** Refuses the two failures that would otherwise ship silently. */
 function renderOrThrow(name: string, source: string): string {
-  // mjml resolves <mj-include path="..."/> against the local filesystem, and its
-  // traversal fix (CVE-2020-12827) is incomplete through 4.18.0, the pinned
-  // version. In this workflow the file it would read is YOUR disk, and the
-  // contents would be pasted into a template you hand to a client.
+  // mjml resolves `<mj-include path="…"/>` against the local filesystem, and
+  // its traversal fix (CVE-2020-12827) is incomplete through 4.18.0. Here the
+  // file it reads is your own disk, and its contents go to a client.
   if (/<\s*mj-include(?![\w-])/i.test(source)) {
     throw new HandoverError(
       `${name}: <mj-include/> is not supported — it reads files from your filesystem.`
@@ -97,10 +72,9 @@ function renderOrThrow(name: string, source: string): string {
     return raw.replace(/^Line (\d+) of \S+ /, "Line $1 ");
   });
 
-  // The authoritative survivor check. Our own expander proves a reference did
-  // not survive OUR scan; this proves it did not survive the COMPILER, which is
-  // the only opinion that decides what reaches the recipient. An unexpanded
-  // reference compiles to a clean-looking email with the block silently absent.
+  // The authoritative survivor check: the expander proves a reference survived
+  // neither of OUR scans, this proves it survived the compiler, which is the
+  // only opinion that decides what reaches the recipient.
   const survived = errors.filter((e) => e.includes(COMPONENT_TAG));
   if (survived.length > 0) {
     throw new HandoverError(
@@ -109,8 +83,8 @@ function renderOrThrow(name: string, source: string): string {
     );
   }
 
-  // Anything else mjml flagged is reported but not fatal: soft validation warns
-  // about markup this tool did not author and the customer may rely on.
+  // Everything else is reported but not fatal: soft validation warns about
+  // markup this tool did not author and the customer may rely on.
   if (errors.length > 0) {
     for (const e of errors) console.log(c.yellow(`    warn ${name}: ${e}`));
   }
@@ -140,7 +114,6 @@ function main(): void {
     }
   }
 
-  // ---- publish every component body from components/ ----
   const store = new InMemoryComponentStore();
   const componentFiles = mjmlFilesUnder(componentsDir);
   if (componentFiles.length === 0) {
@@ -149,13 +122,11 @@ function main(): void {
   }
   console.log(c.bold("\ncomponents"));
   for (const rel of componentFiles) {
-    // The path under components/ is the id, so nesting gives you the brand
-    // prefix for free: shoe-brand/footer.mjml -> "shoe-brand/footer".
+    // shoe-brand/footer.mjml -> "shoe-brand/footer", so nesting gives you the
+    // brand prefix for free.
     const id = rel.slice(0, -".mjml".length).split(sep).join("/");
     const body = readFileSync(join(componentsDir, rel), "utf8").trimEnd();
     try {
-      // publish() enforces the single-root and comment invariants, naming the
-      // component being edited rather than some template that references it.
       store.publish(id, body);
     } catch (err) {
       console.error(c.red(`  ${id}: ${(err as Error).message}`));
@@ -164,7 +135,6 @@ function main(): void {
     console.log(`  ${c.green("published")} ${id}@1  ${c.dim(`${body.length}B`)}`);
   }
 
-  // ---- expand + render every template ----
   const templates = mjmlFilesUnder(templatesDir);
   const proofDir = join(jobDir, "proof");
   const plainDir = join(jobDir, "plain-export");
@@ -202,8 +172,8 @@ function main(): void {
       continue;
     }
 
-    // proof/ needs a BEFORE to compare against. Without originals/ there is
-    // nothing to prove, so say so rather than emitting a one-sided "proof".
+    // Without originals/ there is nothing to prove, which is worth saying
+    // rather than emitting a one-sided "proof".
     const originalPath = join(originalsDir, rel);
     let identical: boolean | null = null;
     let note = "no originals/ — nothing to compare against";

@@ -1,64 +1,19 @@
 /**
- * Measurement harness for the two gating questions in the plan (§3.5 and §11
- * experiment (b)), which must be answered against REAL agency templates before
- * any more of the design system gets built.
+ * Surveys a corpus of real MJML templates for the two numbers that decide how
+ * much of the design system is worth building:
  *
- * The plan says to run both in one sitting because they are the same ten
- * templates and largely the same computation. This does exactly that.
+ *   npm run measure -- ./path/to/templates   # a directory, recursively
+ *   npm run measure -- a.mjml b.mjml         # or explicit files
+ *   npm run measure -- ./templates --json
  *
- *   npm run measure -- ./path/to/templates      # a directory of .mjml files
- *   npm run measure -- a.mjml b.mjml c.mjml     # or explicit files
- *   npm run measure -- ./templates --json       # machine-readable
- *
- * WHY THIS EXISTS AS A TOOL
- * -------------------------
- * Both questions gate real decisions, and both are the kind of thing that gets
- * eyeballed, guessed at, and then quietly treated as settled. The numbers below
- * are cheap to produce and expensive to be wrong about:
- *
- *  - **§11 experiment (b)** decides whether flat, root-level `ov-*` overrides
- *    are sufficient. If the average attribute variance per instance is above
- *    ~3, `ov-*` degenerates into the copy model with worse ergonomics and the
- *    reference verdict (D-2) re-opens — which would invalidate the expander
- *    this repo now contains.
- *
- *    The average ALONE is not the gate, and that nearly shipped as the gate.
- *    `ov-*` reaches the component root and named text slots only. The overrides
- *    email components actually need are frequently BELOW the root: a footer can
- *    have its background overridden but not its unsubscribe link. So the second
- *    number — what fraction of differing attributes sit below the root — can
- *    fail the design while the average passes.
- *
- *  - **§3.5** sizes componentization cost: how much of a real template the
- *    parser can actually address. Under the reference model this is no longer a
- *    viability gate (expansion substitutes a fixed-shape token and runs through
- *    opaque constructs), but it is the go-to-market cost, because it is the
- *    work a migration has to do by hand.
- *
- *  - **§14** counts `mj-text` blocks carrying inline HTML. Any inline element
- *    demotes the whole leaf to an opaque node, and inline HTML in copy is the
- *    norm in real email — so this may be the largest share of the opaque
- *    surface, independent of components.
+ * Both are the kind of thing that gets eyeballed, guessed at, and then quietly
+ * treated as settled — cheap to produce and expensive to be wrong about.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, basename } from "node:path";
 import { parseMjml } from "../shared/blocks/parser.js";
 import type { BlockNode, TreeNode } from "../shared/blocks/types.js";
-
-// ---------------------------------------------------------------------------
-
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-const c = {
-  dim: (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s),
-  bold: (s: string) => (useColor ? `\x1b[1m${s}\x1b[0m` : s),
-  red: (s: string) => (useColor ? `\x1b[31m${s}\x1b[0m` : s),
-  green: (s: string) => (useColor ? `\x1b[32m${s}\x1b[0m` : s),
-  yellow: (s: string) => (useColor ? `\x1b[33m${s}\x1b[0m` : s),
-};
-
-function heading(s: string): void {
-  console.log(`\n${c.bold(s)}\n${c.dim("─".repeat(Math.min(s.length, 76)))}`);
-}
+import { c, heading } from "./term.js";
 
 function collectFiles(args: string[]): string[] {
   const out: string[] = [];
@@ -72,9 +27,8 @@ function collectFiles(args: string[]): string[] {
       continue;
     }
     if (st.isDirectory()) {
-      // Recurse: real template corpora are organised into subdirectories by
-      // lifecycle stage or brand, so a single-level scan silently measures
-      // nothing and prints the usage text as if the arguments were wrong.
+      // Recursive, because real corpora are organised into subdirectories by
+      // lifecycle stage or brand and a flat scan silently measures nothing.
       const walkDir = (dir: string): void => {
         for (const f of readdirSync(dir)) {
           const full = join(dir, f);
@@ -100,10 +54,7 @@ function collectFiles(args: string[]): string[] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// §3.5 / §14 — reachability
-// ---------------------------------------------------------------------------
-
+/** How much of a template the parser can address, and what blocks the rest. */
 interface Reach {
   modeled: number;
   opaque: number;
@@ -127,12 +78,12 @@ function measureReach(doc: ReturnType<typeof parseMjml>): Reach {
         r.opaque++;
         const key = `<${n.originalTagName}>`;
         r.opaqueBy[key] = (r.opaqueBy[key] ?? 0) + 1;
-        // A rich mj-text demotes to a passthrough; count it separately because
-        // it has no registry fix, unlike mj-wrapper / mj-hero / mj-navbar.
+        // Counted apart because rich mj-text has no registry fix, unlike
+        // mj-wrapper / mj-hero / mj-navbar.
         if (n.originalTagName === "mj-text") r.richText++;
         continue;
       }
-      if (n.type === "__unknown__") continue; // comments and stray text
+      if (n.type === "__unknown__") continue;
       r.modeled++;
       if (n.type === "mj-text") r.plainText++;
       if (n.children) walk(n.children);
@@ -143,14 +94,9 @@ function measureReach(doc: ReturnType<typeof parseMjml>): Reach {
   return r;
 }
 
-// ---------------------------------------------------------------------------
-// §11 experiment (b) — attribute variance across repeated blocks
-// ---------------------------------------------------------------------------
-
 /**
- * A "shape" groups blocks that a component could plausibly unify: same tag, and
- * (for containers) the same child-tag sequence. Blocks sharing a shape are the
- * candidates a shared component would replace.
+ * Groups blocks a component could plausibly unify: same tag, and for
+ * containers the same child-tag sequence.
  */
 function shapeKey(n: BlockNode): string {
   const kids = (n.children ?? [])
@@ -162,16 +108,14 @@ function shapeKey(n: BlockNode): string {
 interface ShapeStat {
   shape: string;
   instances: number;
-  /** Mean count of attributes whose value differs from the modal value. */
+  /** Mean number of attributes differing from the modal value. */
   meanDiffering: number;
-  /** Of all differing attributes, the share sitting BELOW the group's root. */
+  /** Of those, the share sitting BELOW the group's root. */
   belowRootShare: number;
   differingKeys: string[];
 }
 
 function measureVariance(docs: ReturnType<typeof parseMjml>[]): ShapeStat[] {
-  // Collect every modeled block, keyed by shape, with its depth relative to the
-  // shape root recorded so below-root differences can be separated.
   const groups = new Map<string, Array<{ node: BlockNode; depth: number }>>();
 
   const walk = (nodes: TreeNode[], depth: number): void => {
@@ -188,9 +132,9 @@ function measureVariance(docs: ReturnType<typeof parseMjml>[]): ShapeStat[] {
   const stats: ShapeStat[] = [];
 
   for (const [shape, members] of groups) {
-    if (members.length < 2) continue; // a single instance cannot vary
+    if (members.length < 2) continue;
 
-    // Modal value per attribute across the group's ROOT nodes.
+    // Modal value per attribute across the group's root nodes.
     const valueCounts = new Map<string, Map<string, number>>();
     for (const { node } of members) {
       for (const [k, v] of node.attrs) {
@@ -209,15 +153,14 @@ function measureVariance(docs: ReturnType<typeof parseMjml>[]): ShapeStat[] {
     const differingKeys = new Set<string>();
 
     for (const { node } of members) {
-      // Root-level differences.
       for (const [k, v] of node.attrs) {
         if (modal.get(k) !== v) {
           totalDiffering++;
           differingKeys.add(k);
         }
       }
-      // Below-root differences: compare descendants position-by-position
-      // against the first member, which stands in for the component body.
+      // Descendants are compared position-by-position against the first
+      // member, which stands in for the component body.
       const first = members[0]!.node;
       const descend = (a: TreeNode[], b: TreeNode[]): void => {
         for (let i = 0; i < Math.min(a.length, b.length); i++) {
@@ -252,8 +195,6 @@ function measureVariance(docs: ReturnType<typeof parseMjml>[]): ShapeStat[] {
   return stats.sort((a, b) => b.instances - a.instances);
 }
 
-// ---------------------------------------------------------------------------
-
 function main(): void {
   const args = process.argv.slice(2);
   const asJson = args.includes("--json");
@@ -262,9 +203,8 @@ function main(): void {
   if (files.length === 0) {
     console.error(
       "Usage: npm run measure -- <dir-of-templates | file.mjml ...> [--json]\n\n" +
-        "Answers the two questions that gate further design-system work:\n" +
-        "  §11 experiment (b) — is flat root-level ov-* sufficient?\n" +
-        "  §3.5              — how much of a real template can the parser address?"
+        "  is flat root-level ov-* sufficient?\n" +
+        "  how much of a real template can the parser address?"
     );
     process.exit(2);
   }
@@ -300,7 +240,7 @@ function main(): void {
     { modeled: 0, opaque: 0, opaqueBy: {}, richText: 0, plainText: 0 }
   );
 
-  // The headline numbers, computed once so text and JSON cannot disagree.
+  // Computed once, so the text and JSON outputs cannot disagree.
   const repeated = variance.filter((v) => v.instances >= 2);
   const weightedMean =
     repeated.length === 0
@@ -322,10 +262,10 @@ function main(): void {
       JSON.stringify(
         {
           files: files.length,
-          experimentB: {
+          overrideVariance: {
             meanDifferingAttrsPerInstance: Number(weightedMean.toFixed(2)),
             belowRootShare: Number(weightedBelowRoot.toFixed(3)),
-            reopensD2: weightedMean > 3 || weightedBelowRoot > 0.5,
+            overridesInsufficient: weightedMean > 3 || weightedBelowRoot > 0.5,
             shapes: variance,
           },
           reachability: { ...totals, opaqueShare: Number(opaqueShare.toFixed(3)) },
@@ -339,14 +279,13 @@ function main(): void {
 
   heading(`Measured ${files.length} template(s)`);
 
-  // ---- §11 experiment (b) ----
-  heading("§11 experiment (b) — is flat root-level ov-* sufficient?");
+  heading("Is flat root-level ov-* sufficient?");
   if (repeated.length === 0) {
     console.log(
       c.yellow(
-        "  No repeated block shapes found. Either these templates share no structure,\n" +
-          "  or there are too few of them. This is not a pass — it means the experiment\n" +
-          "  did not run. Use ten real templates from ONE brand."
+        "  No repeated block shapes found — these templates share no structure, or\n" +
+          "  there are too few of them. Not a pass: the measurement did not run.\n" +
+          "  Use ten real templates from ONE brand."
       )
     );
   } else {
@@ -366,32 +305,30 @@ function main(): void {
     const avgFails = weightedMean > 3;
     const belowFails = weightedBelowRoot > 0.5;
     if (avgFails || belowFails) {
-      console.log(c.red("  VERDICT: D-2 SHOULD RE-OPEN."));
+      console.log(c.red("  VERDICT: the reference model should be re-opened."));
       if (avgFails) {
         console.log(
-          c.dim("    The average is above ~3, so ov-* degenerates into the copy model\n" +
-                "    with worse ergonomics.")
+          c.dim("    Above ~3, ov-* degenerates into the copy model with worse\n" +
+                "    ergonomics.")
         );
       }
       if (belowFails) {
         console.log(
           c.dim("    Most differences target BELOW the component root, which flat ov-*\n" +
-                "    cannot express. Detach would become the routine path rather than an\n" +
-                "    escape hatch — the copy model reached by attrition, through a\n" +
-                "    one-way door.")
+                "    cannot express — detach becomes the routine path rather than an\n" +
+                "    escape hatch, which is the copy model reached by attrition.")
         );
       }
     } else {
       console.log(c.green("  VERDICT: flat root-level ov-* is sufficient for this corpus."));
       console.log(
-        c.dim("    Note the average alone was never the gate: the below-root share is\n" +
-              "    what would fail the design while the average passed.")
+        c.dim("    The average alone was never the gate: the below-root share is what\n" +
+              "    fails the design while the average passes.")
       );
     }
   }
 
-  // ---- §3.5 / §14 ----
-  heading("§3.5 — how much of a real template can the parser address?");
+  heading("How much of a real template can the parser address?");
   console.log(`  ${"template".padEnd(34)} ${"modeled".padStart(8)} ${"opaque".padStart(7)}`);
   for (const { name, reach } of perFile) {
     const share = reach.modeled + reach.opaque === 0 ? 0 : reach.opaque / (reach.modeled + reach.opaque);
@@ -409,7 +346,7 @@ function main(): void {
     }
   }
 
-  heading("§14 — rich mj-text (inline HTML in copy)");
+  heading("Rich mj-text (inline HTML in copy)");
   const textTotal = totals.richText + totals.plainText;
   const richShare = textTotal === 0 ? 0 : totals.richText / textTotal;
   console.log(
@@ -418,10 +355,9 @@ function main(): void {
   );
   console.log(
     c.dim(
-      "\n  Rich mj-text has NO registry fix — any inline element demotes the whole\n" +
-        "  leaf. mj-wrapper / mj-hero / mj-navbar are registry gaps and can be closed;\n" +
-        "  this cannot. If this share is large, it bounds the addressable surface\n" +
-        "  independently of components, and it ships today."
+      "\n  Any inline element demotes the whole leaf, and unlike mj-wrapper /\n" +
+        "  mj-hero / mj-navbar this is not a registry gap that can be closed. A\n" +
+        "  large share bounds the addressable surface independently of components."
     )
   );
 
@@ -429,14 +365,13 @@ function main(): void {
   console.log(
     c.dim(
       "  · Above ~3 mean differing attributes, OR most differences below the root:\n" +
-        "    stop and re-open D-2 before building further on the reference model.\n" +
+        "    stop and re-open the reference model before building further on it.\n" +
         "  · A large opaque share is a MIGRATION COST, not a blocker — it is the\n" +
         "    hand work a first agency onboarding has to do.\n" +
         "  · The by-construct breakdown says whether modelling mj-wrapper is worth\n" +
-        "    it. Note that is not the cheap registry edit the plan assumes: mjml\n" +
-        "    renders mj-wrapper as a div+table structurally identical to mj-section,\n" +
-        "    so stampPaths needs a detector that can tell them apart, and getting\n" +
-        "    that wrong mis-targets canvas clicks silently."
+        "    it, which is not the cheap registry edit it looks like: mjml renders\n" +
+        "    mj-wrapper as a div+table structurally identical to mj-section, so\n" +
+        "    stampPaths needs a detector that tells them apart."
     )
   );
   console.log();

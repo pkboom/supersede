@@ -1,21 +1,14 @@
+import { ExpansionError } from "./types.js";
+
 /**
- * Quote-aware tag scanning for the component expander.
- *
- * **Deliberately not a regex** (plan §11, "two decisions locked now"). A naive
- * `/<mj-component[^>]*\/>/` misses a raw `>` inside an attribute value:
+ * Quote-aware tag scanning. Deliberately not a regex: `/<mj-component[^>]*\/>/`
+ * stops at a `>` inside an attribute value —
  *
  *     <mj-component component-id="x" ov-content="a > b" />
  *
- * ...where `[^>]*` stops at the `>` inside the value and produces a truncated,
- * wrong match. The expander fails closed into the throw-on-survivor guard when
- * that happens, but the plan is explicit that we must not RELY on the guard for
- * something a correct scanner handles.
- *
- * This mirrors the technique already proven in `parser.ts`'s `readElement`:
- * walk the string tracking single/double quote state, and only treat `>` as a
- * tag terminator when outside both.
+ * — and produces a truncated match. The expander's exit guard would catch the
+ * fallout, but a correct scanner should not be leaning on it.
  */
-
 
 /** Raised when a source carries an unterminated `<!--` that could hide a reference. */
 export class UnterminatedCommentError extends ExpansionError {
@@ -41,41 +34,21 @@ export interface CommentScan {
 }
 
 /**
- * Elements whose content is RAW TEXT, not markup. Inside these, `<!--` is
- * ordinary text and opens no comment — htmlparser2 tokenizes them specially and
- * so must we, or `<script><!--</script>` starts a comment here that never
- * started there, swallowing every reference until the next `-->`.
+ * Inside these, `<!--` is ordinary text and opens no comment. `textarea` is
+ * deliberately absent: htmlparser2 treats it as raw text only in HTML mode, and
+ * mjml parses as XML — skipping its content here would call live what the real
+ * parser comments out.
  */
 const RAW_TEXT_ELEMENTS = ["script", "style", "title"];
-// `textarea` is deliberately NOT listed. htmlparser2 treats it as raw text only
-// in HTML mode; under the XML options mjml uses it does not, so skipping its
-// content here made us call live what the real parser comments out. The
-// direction was fail-safe, but a second parser that is "safely wrong" is still
-// wrong, and the next person to read this list should not learn the wrong rule.
 
 /**
- * Byte ranges covered by XML comments.
+ * Byte ranges covered by XML comments. This must agree with htmlparser2, the
+ * parser mjml actually uses: a disagreement is a leak in one direction or a
+ * false rejection in the other.
  *
- * **This must agree with htmlparser2**, which is the parser mjml actually uses
- * (via mjml-parser-xml). Any disagreement is a leak in one direction or a false
- * rejection in the other, and both have happened here:
- *
- *  - A backward `lastIndexOf("<!--")` was fooled by a `<!--` inside an attribute
- *    value, and by an unterminated comment. Fixed by scanning forward and
- *    skipping whole tags quote-aware.
- *  - **Short comments.** htmlparser2 closes `<!-->` and `<!--->` immediately
- *    (Tokenizer.js: "Allow short comments (eg. <!-->)", sequenceIndex = 2).
- *    Searching for `-->` from `lt + 4` misses that and runs the comment on to
- *    the NEXT `-->` anywhere later in the document — which any ordinary trailing
- *    comment supplies — swallowing every reference in between. Searching from
- *    `lt + 2` lets the opener's own `--` serve as the closer's, which is exactly
- *    what htmlparser2 does.
- *  - **Raw-text elements.** See RAW_TEXT_ELEMENTS.
- *
- * An unterminated comment is REPORTED rather than thrown, so the caller can
- * decide. It only matters when a reference could be hidden by it; a template
- * with a stray `<!--` and no components renders fine in mjml and must not be
- * rejected here.
+ * An unterminated comment is reported rather than thrown, because it only
+ * matters when a reference could be hidden by it — a template with a stray
+ * `<!--` and no components renders fine in mjml.
  */
 export function scanComments(src: string): CommentScan {
   const ranges: Range[] = [];
@@ -86,11 +59,8 @@ export function scanComments(src: string): CommentScan {
     const lt = src.indexOf("<", i);
     if (lt === -1) break;
 
-    // CDATA is NOT markup: `<!--` inside it opens no comment, and mjml enables
-    // it (recognizeCDATA: true). Without this the generic tag-skip below stops
-    // at the first `>` INSIDE the CDATA, so a section containing both `>` and
-    // `<!--` leaks a phantom comment opener. That produced both a missed
-    // expansion and — the mirror defect — a 422 on a template mjml compiles.
+    // CDATA is not markup, and mjml enables it. Without this the tag-skip below
+    // stops at the first `>` inside it and leaks a phantom comment opener.
     if (src.startsWith("<![CDATA[", lt)) {
       const close = src.indexOf("]]>", lt + 9);
       i = close === -1 ? src.length : close + 3;
@@ -98,7 +68,9 @@ export function scanComments(src: string): CommentScan {
     }
 
     if (src.startsWith("<!--", lt)) {
-      // From lt + 2, so the opener's own `--` can close a short comment.
+      // From lt + 2, so the opener's own `--` can close a short comment, which
+      // is what htmlparser2 does for `<!-->` and `<!--->`. Searching from lt + 4
+      // would run the comment on to the next `-->` anywhere in the document.
       const close = src.indexOf("-->", lt + 2);
       if (close === -1) {
         unterminatedAt = lt;
@@ -110,8 +82,7 @@ export function scanComments(src: string): CommentScan {
       continue;
     }
 
-    // Skip past this tag quote-aware, so a `<!--` inside an attribute value
-    // cannot be mistaken for a comment opener.
+    // Quote-aware, so a `<!--` inside an attribute value is not a comment opener.
     let j = lt + 1;
     let inSingle = false;
     let inDouble = false;
@@ -127,8 +98,6 @@ export function scanComments(src: string): CommentScan {
       j++;
     }
 
-    // If this opened a raw-text element, its CONTENT is text: skip to the close
-    // tag so a `<!--` inside it is never read as a comment opener.
     const nameMatch = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(lt, j + 1));
     const name = nameMatch?.[1]?.toLowerCase();
     const selfClosed = src[j - 1] === "/";
@@ -155,20 +124,13 @@ export function isInRanges(ranges: Range[], offset: number): boolean {
 
 export interface ScannedAttr {
   name: string;
-  /** Raw value exactly as it appeared in source, entities NOT decoded. */
+  /** Exactly as it appeared in source; entities are not decoded. */
   value: string;
 }
 
-import { ExpansionError } from "./types.js";
-
 /**
- * Raised when a tag is present but cannot be scanned (e.g. unterminated quote).
- *
  * Extends `ExpansionError` deliberately: every caller of `expand()` catches
- * that type, so an error outside the hierarchy escapes them all. When this
- * extended plain `Error`, a malformed reference produced an unhandled HTTP 500
- * with a stack trace from `render.ts` instead of the intended 422, and would
- * have crashed the CLI.
+ * that type, so an error outside the hierarchy escapes all of them.
  */
 export class MalformedTagError extends ExpansionError {
   constructor(
@@ -182,22 +144,19 @@ export class MalformedTagError extends ExpansionError {
 
 export interface ScannedTag {
   name: string;
-  /** Inclusive start offset of `<`. */
+  /** Offset of `<`. */
   start: number;
-  /** Exclusive end offset, one past the closing `>`. */
+  /** One past the closing `>`. */
   end: number;
   selfClosing: boolean;
-  /** Attributes in source order. */
+  /** In source order. */
   attrs: ScannedAttr[];
 }
 
 /**
- * Parse the attribute list of an open tag, given the slice strictly between the
- * end of the tag name and the terminating `>` (or `/>`).
- *
- * Values may be double- or single-quoted. Unquoted values are accepted because
- * hand-authored MJML sometimes carries them, and silently dropping an attribute
- * would be worse than reading it.
+ * Takes the slice between the end of a tag name and its terminating `>`.
+ * Unquoted values are accepted because hand-authored MJML carries them, and
+ * dropping an attribute silently would be worse than reading it.
  */
 function parseAttrs(src: string): ScannedAttr[] {
   const out: ScannedAttr[] = [];
@@ -213,15 +172,14 @@ function parseAttrs(src: string): ScannedAttr[] {
 
     while (i < src.length && /\s/.test(src[i]!)) i++;
 
+    // A valueless attribute (`disabled`) is kept with an empty value rather than
+    // dropped. It does not round-trip — `renderOpenTag` emits `disabled=""` —
+    // but MJML has none, so nothing here depends on the distinction.
     if (src[i] !== "=") {
-      // Valueless attribute (e.g. `disabled`). Recorded with an empty value so
-      // it is not silently dropped. NOTE: this does NOT round-trip —
-      // `renderOpenTag` re-emits it as `disabled=""`. MJML has no valueless
-      // attributes, so nothing in this codebase depends on the distinction.
       out.push({ name, value: "" });
       continue;
     }
-    i++; // consume '='
+    i++;
     while (i < src.length && /\s/.test(src[i]!)) i++;
 
     const quote = src[i];
@@ -230,7 +188,7 @@ function parseAttrs(src: string): ScannedAttr[] {
       const valStart = i;
       while (i < src.length && src[i] !== quote) i++;
       out.push({ name, value: src.slice(valStart, i) });
-      i++; // consume closing quote
+      i++;
     } else {
       const valStart = i;
       while (i < src.length && !/\s/.test(src[i]!)) i++;
@@ -240,14 +198,7 @@ function parseAttrs(src: string): ScannedAttr[] {
   return out;
 }
 
-/**
- * Find the next element with the given tag name at or after `from`, scanning
- * quote-aware so a `>` inside an attribute value cannot terminate the tag
- * early.
- *
- * Only the OPEN tag is located. For a self-closing tag that is the whole
- * element, which is all the component reference ever is.
- */
+/** Locates the OPEN tag only, which for a self-closing tag is the element. */
 export function findTag(
   src: string,
   tagName: string,
@@ -255,25 +206,20 @@ export function findTag(
   comments?: Range[]
 ): ScannedTag | null {
   let searchFrom = from;
-  // Computed once per call unless the caller supplies it; `findAllTags` does,
-  // so repeated scanning stays linear rather than quadratic.
+  // Supplied by `findAllTags`, so repeated scanning stays linear.
   const commentSpans = comments ?? commentRanges(src);
 
   for (;;) {
     const idx = src.indexOf(`<${tagName}`, searchFrom);
     if (idx === -1) return null;
 
-    // Skip tags inside XML comments. Without this a commented-out reference was
-    // expanded INTO the comment — a commented-out line changing the output, and
-    // corrupting the document outright if the body contained `--`.
+    // A commented-out reference must not be expanded into the comment.
     if (isInRanges(commentSpans, idx)) {
       searchFrom = idx + 1;
       continue;
     }
 
-    // Guard against matching a longer tag name that merely starts with ours
-    // (`<mj-component-group` must not match `<mj-component`). Mirrors the
-    // `(?![\w-])` lookahead parser.ts relies on for the same reason.
+    // `<mj-component-group` must not match `<mj-component`.
     const after = src[idx + tagName.length + 1];
     if (after !== undefined && /[\w-]/.test(after)) {
       searchFrom = idx + 1;
@@ -310,11 +256,8 @@ export function findTag(
       i++;
     }
 
-    // A tag that is PRESENT but unscannable is not the same as no tag.
-    // Collapsing both to `null` is what let a malformed reference slip past
-    // both the substitution loop and the survivor guard — the guard used this
-    // same scanner, so anything it could not see was invisible to both, making
-    // the guard a tautology on the expander's own fixpoint.
+    // Present-but-unscannable is not the same as absent: collapsing both to
+    // null would make a malformed reference invisible to the expander's guard.
     if (end === -1) throw new MalformedTagError(tagName, idx);
 
     return {
@@ -340,17 +283,12 @@ export function findAllTags(src: string, tagName: string): ScannedTag[] {
   }
 }
 
-/**
- * Read the first element's open tag in `src`, whatever it is called.
- * Used to locate a component body's single root so overrides can be applied
- * to it.
- */
+/** A component body's single root, so overrides can be applied to it. */
 export function readRootTag(src: string): ScannedTag | null {
   const idx = src.indexOf("<");
   if (idx === -1) return null;
-  // Skip comments; a body may be commented above its root element.
-  // Processing instructions and doctypes are NOT handled — a component body is
-  // a fragment, never a document, so neither can legitimately appear.
+  // A body may be commented above its root. Doctypes and processing
+  // instructions are not handled: a body is a fragment, never a document.
   let cursor = idx;
   while (cursor < src.length) {
     if (src.startsWith("<!--", cursor)) {
@@ -368,20 +306,17 @@ export function readRootTag(src: string): ScannedTag | null {
 }
 
 /**
- * Re-emit an open tag from its parts, preserving attribute order.
- *
- * Values MUST be escaped for `"`, because `parseAttrs` accepts single-quoted
- * source (`alt='say "hi"'`) while this always emits double quotes. Without the
- * escape, a value holding a literal `"` terminates the attribute and everything
- * after it is re-read as further attributes — a working injection primitive,
- * since an `ov-*` override lands on the component root:
+ * Attribute order is preserved; `"` must be escaped because `parseAttrs`
+ * accepts single-quoted source while this always emits double quotes. A value
+ * holding a literal `"` would otherwise terminate its attribute and have the
+ * remainder re-read as further attributes — an injection primitive, since an
+ * `ov-*` override lands on the component root:
  *
  *     ov-color='#000" href="https://evil.test/steal'
  *       -> <mj-button color="#000" href="https://evil.test/steal">
  *
- * The escape is safe for the round-trip contract: a value parsed from
- * double-quoted source can never contain a bare `"`, so this is a no-op there
- * and only fires on the single-quoted and programmatic paths.
+ * A value parsed from double-quoted source cannot contain a bare `"`, so this
+ * is a no-op on the round-trip path.
  */
 export function renderOpenTag(
   name: string,
@@ -396,18 +331,9 @@ export function renderOpenTag(
 }
 
 /**
- * Offset one past the matching close tag of the element opened at `open`.
- *
- * Returns `null` when the element is never closed — deliberately, so callers
- * can distinguish "unclosed" from "closes at end of input". The regex-based
- * predecessor returned the input length in that case, which made
- * `assertSingleRoot` pass VACUOUSLY for an unclosed root: the root appeared to
- * swallow the rest of the body, so no trailing content was ever seen.
- *
- * Uses `findTag`, so it inherits quote-awareness and comment-skipping. The
- * regex version had neither, and counted same-name tags inside comments and
- * inside attribute values, plus incremented depth for self-closing tags it
- * never decremented.
+ * One past the matching close tag, or null when the element is never closed —
+ * which callers must be able to tell apart from "closes at end of input", or
+ * `assertSingleRoot` passes vacuously for an unclosed root.
  */
 export function findElementEnd(src: string, open: ScannedTag): number | null {
   if (open.selfClosing) return open.end;
@@ -424,8 +350,7 @@ export function findElementEnd(src: string, open: ScannedTag): number | null {
     if (!nextClose) return null; // never closed
 
     if (nextOpen && nextOpen.start < nextClose.index) {
-      // A self-closing same-name tag opens and closes at once — it must not
-      // increment depth, which the regex predecessor got wrong.
+      // A self-closing same-name tag opens and closes at once.
       if (!nextOpen.selfClosing) depth++;
       cursor = nextOpen.end;
       continue;
@@ -438,16 +363,13 @@ export function findElementEnd(src: string, open: ScannedTag): number | null {
 }
 
 /**
- * Locate the element at an index path of ELEMENT children, e.g. [0, 2] is the
- * third element child of the first element child.
+ * The element at an index path of ELEMENT children: `[0, 2]` is the third
+ * element child of the first. Comments and text are not counted, so adding a
+ * comment to a component body does not move a path — which is what makes a
+ * path-based override usable at all.
  *
- * Comments and text nodes are not counted, so a path stays stable when someone
- * adds a comment to a component body — which is the whole reason a path-based
- * override is usable at all.
- *
- * Returns null when the path does not resolve, so the caller can raise an error
- * naming the component and the path rather than silently not applying an
- * override the author asked for.
+ * Null when the path does not resolve, so the caller can name the component
+ * rather than silently skipping an override the author asked for.
  */
 export function findElementAtPath(
   src: string,
@@ -456,7 +378,6 @@ export function findElementAtPath(
 ): ScannedTag | null {
   const spans = comments ?? commentRanges(src);
 
-  // Children of the element currently being descended into.
   let scopeStart = 0;
   let scopeEnd = src.length;
   let current: ScannedTag | null = null;

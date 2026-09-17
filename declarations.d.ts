@@ -1,8 +1,4 @@
-/**
- * `mjml` ships no type declarations and `@types/mjml` does not exist for v4.
- * Declared here rather than suppressed at each call site, so the compile
- * result is at least shaped rather than `any` at every import.
- */
+/** mjml v4 ships no types and has no `@types` package. */
 declare module "mjml" {
   interface MjmlError {
     line?: number;

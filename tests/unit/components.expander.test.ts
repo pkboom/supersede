@@ -1,10 +1,3 @@
-/**
- * componentExpander — the reference model's core (plan §11 D-2, §12 weeks 2-4).
- *
- * The guard tests are not ceremony. An unexpanded reference compiles to HTTP
- * 200 with the content silently gone, so "did it throw" is the difference
- * between a loud failure and a footerless email to a client's list.
- */
 import { describe, it, expect } from "vitest";
 import mjml2html from "mjml";
 import {
@@ -51,8 +44,6 @@ describe("store — immutable revisions", () => {
     const s = new InMemoryComponentStore();
     s.publish("a/b", `<mj-text>old</mj-text>`);
     s.publish("a/b", `<mj-text>new</mj-text>`);
-    // This is the whole reference model: a template pinned to 1 is unaffected
-    // by publishing 2, until someone bumps the pin deliberately.
     expect(s.get("a/b", 1)!.body).toContain("old");
     expect(s.get("a/b", 2)!.body).toContain("new");
   });
@@ -100,7 +91,6 @@ describe("store — immutable revisions", () => {
 
 describe("quote-aware tag scanning", () => {
   it("does NOT truncate on a raw > inside an attribute value", () => {
-    // The exact case a naive /<mj-component[^>]*\/>/ gets wrong.
     const src = `<mj-component component-id="a/b" revision="1" ov-content="a > b" />`;
     const tag = findTag(src, "mj-component");
     expect(tag).not.toBeNull();
@@ -159,10 +149,7 @@ describe("expand — substitution", () => {
     for (const r of regions) {
       expect(r.componentId).toBe("shoe-brand/primary-button");
       expect(r.revision).toBe(1);
-      // Chains must DIFFER between the two instances — see below.
       expect(r.instancePath).toHaveLength(1);
-      // The region's byte range must actually bracket its content in the
-      // OUTPUT — this is what makes the range usable by a caller.
       expect(mjml.slice(r.start, r.end)).toContain("Shop now");
     }
   });
@@ -173,8 +160,6 @@ describe("expand — substitution", () => {
   });
 
   it("expandedPathRange is the SIBLING index, not a count of references", () => {
-    // The discriminating fixture: a non-component sibling first. A counter over
-    // <mj-component/> tags reports 0 here; the node is sibling 1.
     const { regions } = expand(
       template(`<mj-text>first</mj-text>${REF}`),
       storeWithButton()
@@ -189,9 +174,6 @@ describe("expand — substitution", () => {
   });
 
   it("rebases NESTED region offsets into the final output", () => {
-    // Regression: a nested region's offsets were computed against the component
-    // body's own coordinate space and never rebased, so slicing the final MJML
-    // with them did not yield the component.
     const s = new InMemoryComponentStore();
     s.publish("brand/button", `<mj-button href="#">GOMARKER</mj-button>`);
     s.publish(
@@ -215,12 +197,10 @@ describe("expand — substitution", () => {
 });
 
 describe("expand — the throw-on-survivor guard", () => {
-  /** A store that silently returns a body still containing a reference. */
   const leakyStore: ComponentStore = {
     get: () => ({
       componentId: "leaky/x",
       revision: 1,
-      // Deliberately smuggles a reference past substitution.
       body: `<mj-section><mj-component component-id="ghost/y" revision="9" /></mj-section>`,
       publishedAt: new Date(),
     }),
@@ -230,26 +210,16 @@ describe("expand — the throw-on-survivor guard", () => {
 
   it("throws rather than returning MJML with a surviving reference", () => {
     const src = template(`<mj-component component-id="leaky/x" revision="1" />`);
-    // The nested ghost/y is not in the store, so expansion fails there first —
-    // which is itself the correct loud failure.
     expect(() => expand(src, leakyStore)).toThrow(ExpansionError);
   });
 
   it("refuses a malformed reference with a typed ExpansionError", () => {
-    // Asserting bare `.toThrow()` hid WHICH error fired. This one is raised by
-    // the scanner during substitution, and it must be an ExpansionError or it
-    // escapes every caller's catch — which produced an unhandled HTTP 500
-    // instead of a 422.
     const src = `<mjml><mj-body><mj-component component-id="a/b revision="1" /></mj-body></mjml>`;
     expect(() => expand(src, storeWithButton())).toThrow(MalformedTagError);
     expect(() => expand(src, storeWithButton())).toThrow(ExpansionError);
   });
 
   it("FIRES the survivor guard on a reference formed only by splicing", () => {
-    // The one input that reaches findSurvivors rather than the substitution
-    // scanner: the body ends mid-tag, and the template text after the reference
-    // completes it. The tag therefore does not exist in either input — only in
-    // the concatenated output — so nothing but the exit guard can catch it.
     const spliced: ComponentStore = {
       get: () => ({
         componentId: "splice/x",
@@ -265,25 +235,17 @@ describe("expand — the throw-on-survivor guard", () => {
   });
 
   it("refuses an unterminated comment rather than guessing", () => {
-    // Both the substitution scanner and the guard previously used a backward
-    // `lastIndexOf("<!--")`, so an unterminated comment made BOTH treat the
-    // rest of the document as commented out. mjml agrees and swallows it, so
-    // the reference vanished at HTTP 200 with no diagnostic.
     const src = `<mjml><mj-body><mj-text>H</mj-text><!-- note${REF}</mj-body></mjml>`;
     expect(() => expand(src, storeWithButton())).toThrow(UnterminatedCommentError);
   });
 
   it("does NOT treat a <!-- inside an attribute value as a comment", () => {
-    // A backward search finds this `<!--` and wrongly concludes the reference
-    // that follows is commented out, so it was neither expanded nor reported.
     const src = `<mjml><mj-body><mj-section><mj-column><mj-text alt="<!--">H</mj-text>${REF}</mj-column></mj-section></mj-body></mjml>`;
     const { mjml } = expand(src, storeWithButton());
     expect(mjml).toContain("Shop now");
   });
 
   it("does NOT fire on a reference inside a comment", () => {
-    // A commented-out reference loses no content — mjml never renders it — so
-    // the guard must not false-positive on it, and it must not be expanded.
     const s = new InMemoryComponentStore();
     s.publish("c/m", `<mj-text>EXPANDED</mj-text>`);
     const src = `<mjml><mj-body><!-- <mj-component component-id="c/m" revision="1" /> --><mj-section><mj-column><mj-text>real</mj-text></mj-column></mj-section></mj-body></mjml>`;
@@ -302,15 +264,12 @@ describe("expand — the throw-on-survivor guard", () => {
       latest: () => undefined,
       list: () => [],
     };
-    // Entity-encoded, so it is NOT a real tag and must NOT trip the guard.
     expect(() =>
       expand(template(`<mj-component component-id="sneaky/x" revision="1" />`), sneaky)
     ).not.toThrow();
   });
 
   it("UnexpandedReferenceError carries the survivors", () => {
-    // A store that hands back a body containing a reference assembled so the
-    // substitution pass has already finished with it.
     const smuggler: ComponentStore = {
       get: () => ({
         componentId: "smuggle/x",
@@ -327,24 +286,17 @@ describe("expand — the throw-on-survivor guard", () => {
     } catch (e) {
       caught = e;
     }
-    // Asserted OUTSIDE a conditional. Guarding the assertion on the type meant
-    // the block never ran when a different error fired, leaving `toBeDefined`
-    // as the only live check — a test that could not fail.
     expect(caught).toBeInstanceOf(ExpansionError);
   });
 
   it("PROVES the failure the guard prevents: mjml drops it at HTTP-200 silently", () => {
-    // This is the justification for the guard existing at all, asserted rather
-    // than described. An unexpanded reference does NOT fail compilation.
     const res = mjml2html(template(REF), { validationLevel: "soft" }) as {
       html: string;
       errors?: unknown[];
     };
     expect(res.html).not.toContain("Shop now");
     expect(res.html).not.toContain("mj-component");
-    // The rest of the email still renders — which is what makes it silent.
     expect(res.html.length).toBeGreaterThan(0);
-    // And the diagnostic exists but lives somewhere render.ts never reads.
     expect((res.errors ?? []).length).toBeGreaterThan(0);
   });
 
@@ -407,8 +359,6 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("records EVERY root override, not just the last", () => {
-    // Regression: the map was keyed by inner path, and every root override
-    // targets the same path (""), so N overrides collapsed to 1.
     const src = template(
       `<mj-component component-id="shoe-brand/primary-button" revision="1" ` +
         `ov-color="#fff" ov-background-color="#000" ov-padding="4px" />`
@@ -447,9 +397,6 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("strips the data-slot marker from expanded output when the slot IS overridden", () => {
-    // The marker is authoring metadata for the stored body. mjml rejects it
-    // ("Attribute data-slot is illegal") and it is a visible trace of the tool
-    // in a file the customer is told is byte-identical to their own.
     const s = new InMemoryComponentStore();
     s.publish(
       "brand/hero",
@@ -464,10 +411,6 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("strips the data-slot marker even when the slot is NOT overridden", () => {
-    // The leak that matters most: a reference carrying no overrides never
-    // reaches replaceSlotText at all (applyOverrides returns early), so a fix
-    // confined to the override path would leak from exactly the templates
-    // that customised nothing.
     const s = new InMemoryComponentStore();
     s.publish(
       "brand/hero",
@@ -482,10 +425,6 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("removes ONLY the marker, leaving surrounding attribute formatting verbatim", () => {
-    // Excising the attribute text must not become a re-emit through
-    // renderOpenTag, which normalises quote style and collapses whitespace —
-    // that would trade this leak for a subtler one in any single-quoted or
-    // multi-line source file.
     const s = new InMemoryComponentStore();
     s.publish(
       "brand/odd",
@@ -513,10 +452,7 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("expanded output with a slot passes mjml STRICT validation", () => {
-    // plain-export/ is the deliverable that fails if the marker survives:
-    // mjml throws at strict validation rather than rendering.
     const s = new InMemoryComponentStore();
-    // Body must be legal where template() puts it — inside <mj-column>.
     s.publish("brand/line", `<mj-text data-slot="headline">Default</mj-text>`);
     const { mjml } = expand(
       template(`<mj-component component-id="brand/line" revision="1" ov-slot-headline="Custom" />`),
@@ -536,15 +472,12 @@ describe("expand — overrides (ov-*)", () => {
   });
 
   it("keeps entity-encoded override values byte-stable across expansions", () => {
-    // D-2 locks: all ov-* values must be entity-encoded. Verify the value is
-    // not re-escaped or decoded on the way through.
     const src = template(
       `<mj-component component-id="shoe-brand/primary-button" revision="1" ov-href="https://x.test/?a=1&amp;b=2" />`
     );
     const store = storeWithButton();
     const first = expand(src, store).mjml;
     expect(first).toContain(`href="https://x.test/?a=1&amp;b=2"`);
-    // The entity must not compound the way §0.2's bug did.
     expect(first).not.toContain("&amp;amp;");
   });
 });
@@ -563,7 +496,6 @@ describe("expand — nesting and the depth cap", () => {
     );
     expect(mjml).toContain("Go");
     expect(mjml).not.toContain("mj-component");
-    // Two regions: the card, and the button nested inside it.
     expect(regions).toHaveLength(2);
   });
 
@@ -579,9 +511,6 @@ describe("expand — nesting and the depth cap", () => {
       s
     );
     const inner = regions.find((r) => r.componentId === "brand/button")!;
-    // "Click inside a footer that contains a button: footer, or button?" — the
-    // chain is what makes that answerable. Each element is
-    // `id@revision#siblingIndex`.
     expect(inner.instancePath).toHaveLength(2);
     expect(inner.instancePath[0]).toMatch(/^brand\/card@1#/);
     expect(inner.instancePath[1]).toMatch(/^brand\/button@1#/);
@@ -622,7 +551,6 @@ describe("expand — pins (the dry-run diff)", () => {
     const before = expand(src, s).mjml;
     const after = expand(src, s, { pins: { "shoe-brand/primary-button": 2 } }).mjml;
     expect(before).not.toBe(after);
-    // And critically: the STORED template is untouched by either.
     expect(src).toContain(`revision="1"`);
   });
 });
@@ -667,8 +595,6 @@ describe("locateInstances — detect-and-report is mandatory", () => {
   });
 
   it("still EXPANDS correctly even when the instance is unreachable", () => {
-    // The asymmetry that decided D-2: reference substitutes a fixed-shape token
-    // and runs straight through an opaque wrapper. Copy could not.
     const src = `<mjml><mj-body><mj-wrapper><mj-section><mj-column>${REF}</mj-column></mj-section></mj-wrapper></mj-body></mjml>`;
     expect(locateInstances(src).summary.unreachable).toBe(1);
     const { mjml } = expand(src, storeWithButton());
@@ -682,8 +608,6 @@ describe("locateInstances — detect-and-report is mandatory", () => {
 });
 
 describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
-  // Any disagreement is a leak in one direction or a false rejection in the
-  // other, and both have happened here.
   const store = () => {
     const s = new InMemoryComponentStore();
     s.publish("shoe/footer", `<mj-text>FOOTERMARK</mj-text>`);
@@ -692,10 +616,6 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
   const REFF = `<mj-component component-id="shoe/footer" revision="1" />`;
 
   it("treats <!--> as a COMPLETE comment, not one running to the next -->", () => {
-    // htmlparser2 closes short comments immediately (Tokenizer.js: "Allow short
-    // comments (eg. <!-->)"). Searching for `-->` from lt+4 misses that and runs
-    // the comment on to any later `-->`, swallowing every reference between —
-    // which surfaced as HTTP 200 with the content silently gone.
     const src = `<mjml><mj-body><mj-section><mj-column><!--><mj-text>Hello</mj-text>${REFF}</mj-column></mj-section><!-- footer --></mj-body></mjml>`;
     expect(expand(src, store()).mjml).toContain("FOOTERMARK");
   });
@@ -706,8 +626,6 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
   });
 
   it("does not treat <!-- inside a raw-text element as a comment opener", () => {
-    // Inside <script>/<style>/<title>/<textarea> the content is TEXT, so `<!--`
-    // opens no comment. Reading it as one swallowed everything to the next -->.
     const src = `<mjml><mj-body><mj-section><mj-column><mj-raw><script><!--</script></mj-raw>${REFF}</mj-column></mj-section><!-- t --></mj-body></mjml>`;
     expect(expand(src, store()).mjml).toContain("FOOTERMARK");
   });
@@ -719,9 +637,6 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
   });
 
   it("does NOT reject a stray <!-- in a template with no references", () => {
-    // The mirror defect of the leak: throwing unconditionally rejected
-    // templates mjml renders without complaint. The throw is only warranted
-    // when an unterminated comment could HIDE a reference.
     const src = `<mjml><mj-body><mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section></mj-body><!-- note</mjml>`;
     expect(() => expand(src, store())).not.toThrow();
   });
@@ -732,9 +647,6 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
   });
 
   it("expands a 200-reference document quickly enough for the render path", () => {
-    // Regression: findTag was called without the precomputed comment ranges, so
-    // every reference rescanned the whole document. That took ~8s here, inside
-    // /api/render, which the preview pane hits on a 200ms keystroke debounce.
     const s = new InMemoryComponentStore();
     s.publish("b/btn", `<mj-button href="#">Go</mj-button>`);
     const pad = Array.from({ length: 300 }, (_, i) => `<mj-text>Filler ${i} with a realistic amount of body copy.</mj-text>`).join("");
@@ -747,10 +659,6 @@ describe("comment scanning agrees with htmlparser2 (mjml's parser)", () => {
 });
 
 describe("unterminated comments in component BODIES (the fourth silent-200 path)", () => {
-  // This is the one content-loss path the compiler-authority check in render.ts
-  // structurally CANNOT catch: the reference expands successfully, so mjml
-  // reports nothing, while the body's stray `<!--` truncates every template
-  // that references it. One bad publish silently poisons the whole corpus.
 
   it("publish() rejects an unterminated comment in a body", () => {
     const s = new InMemoryComponentStore();
@@ -760,9 +668,6 @@ describe("unterminated comments in component BODIES (the fourth silent-200 path)
   });
 
   it("expansion still catches a body from a store that did not validate", () => {
-    // ComponentStore is an interface; a body can reach the expander from an
-    // implementation that never called assertSingleRoot. Publish-time
-    // validation alone is therefore not sufficient.
     const unvalidated: ComponentStore = {
       get: () => ({
         componentId: "c/bad",
@@ -780,10 +685,6 @@ describe("unterminated comments in component BODIES (the fourth silent-200 path)
 
 describe("CDATA is not markup", () => {
   it("a CDATA section containing > and <!-- does not create a phantom comment", () => {
-    // mjml enables recognizeCDATA. Without handling it, the generic tag-skip
-    // stopped at the `>` INSIDE the CDATA and read the following `<!--` as a
-    // comment opener — which both hid a reference AND falsely rejected a
-    // template mjml compiles.
     const s = new InMemoryComponentStore();
     s.publish("c/x", `<mj-text>CMARK</mj-text>`);
     const src = `<mjml><mj-body><mj-section><mj-column><mj-raw><![CDATA[a>b<!--]]></mj-raw><mj-component component-id="c/x" revision="1" /><!-- t --></mj-column></mj-section></mj-body></mjml>`;
@@ -810,10 +711,6 @@ describe("the unterminated-comment rejection is scoped to references it could hi
 });
 
 describe("below-root overrides (ov-at-<path>-<attr>)", () => {
-  // Added because experiment (b) over 39 real templates showed root-only
-  // overrides cannot express what real components need. The composite shapes —
-  // a product card, a CTA block — carry 80-100% of their variance BELOW the
-  // root. Without this, detach becomes the routine path.
   const card = () => {
     const s = new InMemoryComponentStore();
     s.publish(
@@ -914,15 +811,6 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
     expect(src).toContain(`revision="1"`);
   });
 
-
-  // ---- tag assertions (ov-tag-<path>) ----
-  //
-  // An index path is positional and points into a revision that is DESIGNED to
-  // change. Without these, r5 reordering the component's interior makes
-  // `ov-at-2-href` resolve to a different element, mjml's soft validation drops
-  // the attribute on the wrong node without an error, and every re-pinned
-  // template silently loses its link at HTTP 200.
-
   it("throws when the path resolves to a different tag than asserted", () => {
     const before = new InMemoryComponentStore();
     before.publish(
@@ -930,7 +818,6 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
       `<mj-column><mj-image src="/a.png" /><mj-text>Copy</mj-text><mj-button href="https://default.test">Go</mj-button></mj-column>`
     );
     const after = new InMemoryComponentStore();
-    // r2 moves the button ahead of the text — index 2 is now an mj-text.
     after.publish(
       "brand/card",
       `<mj-column><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button><mj-text>Copy</mj-text></mj-column>`
@@ -941,15 +828,11 @@ describe("below-root overrides (ov-at-<path>-<attr>)", () => {
   });
 
   it("without the guard the same rearrangement would land on the wrong node", () => {
-    // Pins the exact silent corruption the assertion exists to prevent: the
-    // override value ends up on mj-text and the button keeps its default href.
     const after = new InMemoryComponentStore();
     after.publish(
       "brand/card",
       `<mj-column><mj-image src="/a.png" /><mj-button href="https://default.test">Go</mj-button><mj-text>Copy</mj-text></mj-column>`
     );
-    // Asserting the tag the path NOW resolves to proves the override really
-    // does target that node — which is why omitting the assertion is unsafe.
     const { mjml } = expand(
       tpl(` ov-tag-2="mj-text" ov-at-2-href="https://custom.test"`),
       after

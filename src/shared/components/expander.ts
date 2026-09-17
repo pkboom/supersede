@@ -1,31 +1,14 @@
 /**
- * componentExpander — substitute `<mj-component/>` references with the content
- * of the revision they pin, applying per-instance `ov-*` overrides, and return
- * PROVENANCE alongside the MJML (plan §8, §11 D-2).
+ * Substitutes `<mj-component/>` references with the content of the revision
+ * they pin, applies per-instance `ov-*` overrides, and returns provenance
+ * alongside the MJML. The regions are returned rather than discarded because
+ * they exist only at the moment of substitution and cannot be recovered from
+ * the expanded string.
  *
- * WHY IT RETURNS REGIONS AND NOT A STRING
- * ---------------------------------------
- * An earlier spec had this returning MJML. The overlay needs, for every stamped
- * path in the expanded tree: which stored `<mj-component/>` node it came from,
- * which instance, and which `ov-*` key an inner node binds to. **That
- * information exists only here, at the moment of substitution, and is
- * unrecoverable from the expanded string afterwards.** You cannot reconstruct
- * "this `<mj-text>` came from the footer component's headline slot" after the
- * fact. The expander already computes all of it; it just has to stop throwing
- * it away. Free to decide now, expensive once callers exist.
- *
- * THE GUARD IS THE POINT
- * ----------------------
- * `expand()` throws if any `<mj-component` survives to its exit. The guard
- * lives HERE, at the expander's exit, and not in `render.ts`, so that every
- * present and future caller inherits it rather than each one remembering.
- *
- * The failure it prevents is the worst one in the system and it is silent:
- * mjml drops an unregistered `<mj-component/>` under `validationLevel: "soft"`
- * and returns **HTTP 200 with the content simply gone**. The diagnostic lands
- * in `result.errors`, which `render.ts` reaches by type assertion and never
- * reads. One missed expansion is a footerless email to a client's list, with no
- * signal anywhere in the system.
+ * `expand` throws if any reference survives to its exit. That guard lives here
+ * rather than in a caller so every present and future caller inherits it: mjml
+ * drops an unknown `<mj-component/>` under soft validation and returns HTTP
+ * 200 with the content silently gone.
  */
 import {
   COMPONENT_TAG,
@@ -58,23 +41,14 @@ import {
 } from "./tagScan.js";
 
 /**
- * Survivor scan — deliberately INDEPENDENT of the substitution scanner.
+ * Deliberately independent of the substitution scanner, and deliberately
+ * dumber: it looks only for the literal tag opening with a name check and
+ * cares nothing for well-formedness. Sharing a scanner would make the guard a
+ * tautology on the expander's own fixpoint — a reference with an unterminated
+ * quote is invisible to `findTag`, so it would be invisible to the guard too.
  *
- * The guard previously called `findAllTags`, the same scanner `expandInto` uses
- * to find tags. That made it a tautology on the expander's own fixpoint:
- * anything `findTag` could see had already been substituted, and anything it
- * could NOT see was equally invisible to the guard. A reference with an
- * unterminated quote —
- *
- *     <mj-component component-id="a/b revision="1" />
- *
- * — was skipped by both, and the "single most important failure in the system"
- * sailed through to mjml, HTTP 200, content silently gone.
- *
- * So this scan is maximally permissive: it looks only for the literal tag
- * opening with a name-boundary check, and cares nothing for well-formedness.
- * It must never become "smarter" — its whole value is failing in a different
- * direction from the scanner it checks.
+ * Never make this smarter. Its whole value is failing in a different direction
+ * from the scanner it checks.
  */
 function findSurvivors(src: string, comments: Range[]): number[] {
   const out: number[] = [];
@@ -85,12 +59,10 @@ function findSurvivors(src: string, comments: Range[]): number[] {
     const after = src[at + needle.length];
     const isTagStart = after === undefined || !/[\w-]/.test(after);
 
-    // A commented-out reference loses no content — mjml never renders it — so
-    // it is not a survivor. This is the guard's ONE exclusion, and it is safe
-    // to share `commentRanges` with the substitution scanner because that
-    // function is total: it returns unambiguous ranges or throws. The
-    // independence that matters is over tag WELL-FORMEDNESS, where this scan
-    // remains deliberately more permissive than `findTag`.
+    // A commented-out reference loses no content, so it is not a survivor.
+    // The guard's one exclusion, and a safe one to share with the substitution
+    // scanner: comment ranges are total, and the independence that matters is
+    // over tag well-formedness.
     if (isTagStart && !isInRanges(comments, at)) out.push(at);
     at = src.indexOf(needle, at + 1);
   }
@@ -98,25 +70,19 @@ function findSurvivors(src: string, comments: Range[]): number[] {
 }
 
 /**
- * Index of the element starting at `offset` among its PARENT's element children.
+ * Index among the parent's ELEMENT children — not among references, which
+ * would report 0 for the component in `<mj-text/><mj-component/>`.
  *
- * This is the number `expandedPathRange` needs, and it is computable from the
- * stored source precisely because of the single-root invariant: one reference
- * substitutes to exactly one node, so a reference's sibling index in the stored
- * tree IS its sibling index in the expanded tree. That equivalence is the whole
- * reason the invariant is enforced at publish time.
- *
- * An earlier version used a counter over `<mj-component/>` tags instead, which
- * is only correct when every sibling happens to be a reference — the shape the
- * one test covering it used. In `<mj-text/><mj-component/>` it reported 0 for a
- * node that is sibling 1.
+ * Computable from the stored source only because of the single-root invariant:
+ * one reference substitutes to exactly one node, so this index is the same in
+ * both trees. That equivalence is why the invariant is enforced at publish.
  */
 function siblingIndexOf(
   source: string,
   offset: number,
   comments: Range[]
 ): number {
-  // Counts of element children seen so far at each open depth.
+  // Element children seen so far at each open depth.
   const counts: number[] = [0];
   let i = 0;
 
@@ -130,10 +96,10 @@ function siblingIndexOf(
       continue;
     }
 
+    // The element that just closed counts as one child of its parent.
     if (source.startsWith("</", lt)) {
       const gt = source.indexOf(">", lt);
       counts.pop();
-      // The element that just closed counts as one child of its parent.
       counts[counts.length - 1] = (counts[counts.length - 1] ?? 0) + 1;
       i = gt === -1 ? source.length : gt + 1;
       continue;
@@ -149,8 +115,7 @@ function siblingIndexOf(
     try {
       tag = findTag(source, m[1]!, lt, comments);
     } catch {
-      // Malformed tag: cannot classify. Stop here rather than guess — the
-      // survivor guard reports the real problem.
+      // Cannot classify; the survivor guard reports the real problem.
       break;
     }
     if (!tag || tag.start !== lt) {
@@ -171,22 +136,45 @@ function siblingIndexOf(
   return counts[counts.length - 1] ?? 0;
 }
 
+/** Every open tag in document order. Throws wherever `findTag` throws. */
+function* scanTags(src: string): Generator<ScannedTag> {
+  let cursor = 0;
+  while (cursor < src.length) {
+    const lt = src.indexOf("<", cursor);
+    if (lt === -1) return;
+    const m = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(lt));
+    const tag = m ? findTag(src, m[1]!, lt) : null;
+    if (!tag || tag.start !== lt) {
+      cursor = lt + 1;
+      continue;
+    }
+    yield tag;
+    cursor = tag.end;
+  }
+}
+
+/** Re-emits `tag`'s open tag with `updates` merged in, in source order. */
+function setAttrs(
+  src: string,
+  tag: ScannedTag,
+  updates: Map<string, string>
+): string {
+  const attrs: ScannedAttr[] = [...tag.attrs];
+  for (const [name, value] of updates) {
+    const existing = attrs.findIndex((a) => a.name === name);
+    if (existing >= 0) attrs[existing] = { name, value };
+    else attrs.push({ name, value });
+  }
+  return (
+    src.slice(0, tag.start) +
+    renderOpenTag(tag.name, attrs, tag.selfClosing) +
+    src.slice(tag.end)
+  );
+}
+
 /**
- * Apply `ov-*` overrides to a component body.
- *
- * Two forms, both scoped to flat, root-level targets by design:
- *   - `ov-<attr>`        -> set `<attr>` on the body's ROOT element
- *   - `ov-slot-<name>`   -> replace the text content of the element carrying
- *                           `data-slot="<name>"`
- *
- * Below-root attribute targeting is deliberately OUT of scope. That is a real
- * limitation, not an oversight: a footer rooted at `mj-section` can have its
- * background overridden but not its unsubscribe link. §11 experiment (b) sizes
- * whether that limitation is survivable, and it has not been run — see the
- * caller-facing note in `expand()`.
- *
- * Returns the rewritten body plus the inner-path -> ov-key bindings the overlay
- * needs.
+ * Returns the rewritten body and the `ov-*` key -> inner path bindings. See
+ * `types.ts` for the three override forms.
  */
 function applyOverrides(
   body: string,
@@ -203,9 +191,9 @@ function applyOverrides(
   /** path string -> asserted tag name (see TAG_ASSERT_PREFIX) */
   const tagAsserts = new Map<string, string>();
 
+  // Order matters: `ov-tag-` and `ov-at-` both start with `ov-`, and testing
+  // the plain prefix first would turn them into root attributes.
   for (const [key, value] of overrides) {
-    // `ov-tag-` must be tested BEFORE `ov-` or it falls through to the root
-    // branch and quietly becomes a root attribute named `tag-2`.
     if (key.startsWith(TAG_ASSERT_PREFIX)) {
       const pathStr = key.slice(TAG_ASSERT_PREFIX.length);
       if (!/^\d+(\.\d+)*$/.test(pathStr)) {
@@ -220,9 +208,8 @@ function applyOverrides(
       }
       tagAsserts.set(pathStr, value);
     } else if (key.startsWith(PATH_PREFIX)) {
-      // `ov-at-<path>-<attr>`; the path is digits and dots, so the FIRST `-`
-      // after it separates path from attribute name. That keeps attribute
-      // names containing dashes (background-color) unambiguous.
+      // The path is digits and dots, so the first `-` after it splits path from
+      // attribute — which keeps dashed names like `background-color` unambiguous.
       const rest = key.slice(PATH_PREFIX.length);
       const dash = rest.indexOf("-");
       if (dash <= 0) {
@@ -248,7 +235,6 @@ function applyOverrides(
 
   let out = body;
 
-  // --- root attribute overrides ---
   if (attrOverrides.size > 0) {
     const root = readRootTag(out);
     if (!root) {
@@ -256,35 +242,15 @@ function applyOverrides(
         `Component "${componentId}" body has no root element to apply overrides to`
       );
     }
-    const attrs: ScannedAttr[] = [...root.attrs];
-    for (const [name, value] of attrOverrides) {
-      const existing = attrs.findIndex((a) => a.name === name);
-      if (existing >= 0) {
-        // Update in place so the source attribute ORDER is preserved — the same
-        // insertion-order invariant the block parser maintains.
-        attrs[existing] = { name, value };
-      } else {
-        attrs.push({ name, value });
-      }
-      // Key by the ov-key: every root override targets the same path, so a
-      // path-keyed map would keep only the last one.
+    out = setAttrs(out, root, attrOverrides);
+    for (const name of attrOverrides.keys()) {
       overridable.set(`${OVERRIDE_PREFIX}${name}`, "");
     }
-    out =
-      out.slice(0, root.start) +
-      renderOpenTag(root.name, attrs, root.selfClosing) +
-      out.slice(root.end);
   }
 
-  // --- below-root attribute overrides, by index path ---
-  //
-  // Applied DEEPEST-FIRST so that rewriting one element's open tag cannot
-  // invalidate the offsets of another override still to be applied. Rewriting
-  // a shallower element first would shift every offset inside it.
-  // Every path override MUST carry a tag assertion, and every assertion must
-  // belong to one. The first rule is what makes the guard a guard; the second
-  // catches a stale or mistyped assertion, which would otherwise sit in the
-  // template looking like protection it is not providing.
+  // Every path override must carry a tag assertion, which is what makes the
+  // guard a guard, and every assertion must belong to one — otherwise a stale
+  // or mistyped assertion sits in the template looking like protection.
   for (const pathStr of pathOverrides.keys()) {
     if (!tagAsserts.has(pathStr)) {
       throw new ExpansionError(
@@ -302,14 +268,14 @@ function applyOverrides(
     }
   }
 
+  // Deepest first, so rewriting one open tag cannot invalidate the offsets of
+  // an override still to be applied.
   const paths = [...pathOverrides.keys()].sort(
     (a, b) => b.split(".").length - a.split(".").length || b.localeCompare(a)
   );
   for (const pathStr of paths) {
-    // Paths are relative to the ROOT'S CHILDREN, which is the natural reading
-    // of "below the root": `ov-at-2-href` targets the root's third element
-    // child. The single-root invariant makes the root itself index 0 at
-    // document level, so prepending 0 turns a root-relative path into an
+    // Paths are relative to the root's children. Single-root makes the root
+    // itself index 0, so prepending 0 turns a root-relative path into an
     // absolute one without a second traversal mode.
     const indices = [0, ...pathStr.split(".").map(Number)];
     const target = findElementAtPath(out, indices);
@@ -325,20 +291,13 @@ function applyOverrides(
           `The component's interior has changed shape since this override was written — re-point it rather than removing the assertion.`
       );
     }
-    const attrs: ScannedAttr[] = [...target.attrs];
-    for (const [name, value] of pathOverrides.get(pathStr)!) {
-      const existing = attrs.findIndex((a) => a.name === name);
-      if (existing >= 0) attrs[existing] = { name, value };
-      else attrs.push({ name, value });
+    const updates = pathOverrides.get(pathStr)!;
+    out = setAttrs(out, target, updates);
+    for (const name of updates.keys()) {
       overridable.set(`${PATH_PREFIX}${pathStr}-${name}`, pathStr);
     }
-    out =
-      out.slice(0, target.start) +
-      renderOpenTag(target.name, attrs, target.selfClosing) +
-      out.slice(target.end);
   }
 
-  // --- named slot text overrides ---
   for (const [slotName, value] of slotOverrides) {
     const replaced = replaceSlotText(out, slotName, value);
     if (replaced === null) {
@@ -355,63 +314,29 @@ function applyOverrides(
 }
 
 /**
- * Remove every `data-slot="…"` marker from an expanded component body.
+ * `data-slot` is authoring metadata for the stored body. mjml rejects it, and
+ * leaving it in puts a marker the customer never typed into every file.
  *
- * The marker is authoring metadata for the STORED body: it tells
- * `replaceSlotText` which element a named text override targets. It has no
- * meaning in the delivered email, and mjml rejects it — `Attribute data-slot
- * is illegal` under soft validation, and a THROW under strict. Left in, it
- * also breaks the one promise the expander exists to keep: expanded output is
- * supposed to be byte-identical to the MJML the customer already had, and a
- * marker they never typed is a visible trace of the tool in every file.
+ * Called unconditionally on the way out rather than from `replaceSlotText`: a
+ * slot that is declared but never overridden never reaches that function, so a
+ * fix confined to the override path would leak from exactly the templates that
+ * customised nothing.
  *
- * Stripping happens on the way OUT, unconditionally — not inside
- * `replaceSlotText`. A slot that is declared but never overridden never
- * reaches that function (`applyOverrides` returns early when a reference
- * carries no overrides), so fixing only the override path would leak the
- * marker from exactly the templates that customised nothing.
- *
- * The attribute text is excised from the open tag rather than the tag being
- * re-emitted through `renderOpenTag`, which normalises quote style and
- * collapses inter-attribute whitespace. Re-emitting would trade this leak for
- * a subtler one: every slot-bearing element in a single-quoted or multi-line
- * source file would come back reformatted.
+ * Excises the attribute text rather than re-emitting through `renderOpenTag`,
+ * which would normalise quote style and whitespace across every slot-bearing
+ * element in a single-quoted or multi-line source file.
  */
 function stripSlotMarkers(body: string): string {
-  // Collect spans first and splice from the end, so earlier offsets stay valid.
+  // Collected first and spliced from the end, so earlier offsets stay valid.
   const cuts: Array<{ start: number; end: number }> = [];
-  let cursor = 0;
 
-  while (cursor < body.length) {
-    const lt = body.indexOf("<", cursor);
-    if (lt === -1) break;
-    const m = /^<\s*([A-Za-z][\w-]*)/.exec(body.slice(lt));
-    if (!m) {
-      cursor = lt + 1;
-      continue;
-    }
-    let tag: ScannedTag | null;
-    try {
-      tag = findTag(body, m[1]!, lt);
-    } catch {
-      // Malformed open tag: leave it untouched. The survivor guard in
-      // render.ts reports the real problem with better context than a
-      // cosmetic pass could.
-      return body;
-    }
-    if (!tag || tag.start !== lt) {
-      cursor = lt + 1;
-      continue;
-    }
-
-    if (tag.attrs.some((a) => a.name === SLOT_ATTR)) {
-      const open = body.slice(tag.start, tag.end);
-      // Anchored to the attribute name preceded by whitespace, so `data-slot`
-      // occurring inside another attribute's VALUE is not matched. Quoted
-      // values cannot contain the delimiting `>`, and an unquoted value
-      // cannot contain whitespace or `>`, so the span is unambiguous.
+  try {
+    for (const tag of scanTags(body)) {
+      if (!tag.attrs.some((a) => a.name === SLOT_ATTR)) continue;
+      // Anchored to a whitespace-preceded name, so `data-slot` inside another
+      // attribute's value does not match.
       const re = /\s+data-slot\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/;
-      const hit = re.exec(open);
+      const hit = re.exec(body.slice(tag.start, tag.end));
       if (hit) {
         cuts.push({
           start: tag.start + hit.index,
@@ -419,7 +344,10 @@ function stripSlotMarkers(body: string): string {
         });
       }
     }
-    cursor = tag.end;
+  } catch {
+    // Malformed: leave it alone. The survivor guard reports the real problem
+    // with better context than a cosmetic pass could.
+    return body;
   }
 
   let out = body;
@@ -430,81 +358,48 @@ function stripSlotMarkers(body: string): string {
 }
 
 /**
- * Replace the TEXT content of the element carrying `data-slot="<name>"`.
+ * Replaces the TEXT content of the element marked `data-slot="<name>"`, and
+ * returns null for anything else — including a slot element that contains
+ * elements, since emptying it would silently delete a subtree.
  *
- * Returns null when no such element exists, so the caller can raise an error
- * naming the component rather than silently producing an un-overridden body.
- *
- * Three things this has to get right, each of which it previously did not:
- *
- *  - **It must be text.** Replacing everything between the open and close tags
- *    deletes element children, so a slot on a container silently destroyed its
- *    subtree. A slot element containing elements is now rejected rather than
- *    emptied.
- *  - **The close tag must be the MATCHING one**, not the first one with that
- *    name — same-name nesting corrupted the body otherwise.
- *  - **The value is escaped.** It is interpolated into element content, so an
- *    unescaped value can close the slot and open new elements:
- *    `ov-slot-x="</mj-text><mj-raw><script>…"` injected script into the
- *    delivered email. This is a one-way ingress escape (the value is not read
- *    back out as source), so it does not reintroduce the compounding problem
- *    §0.2 fixed.
+ * The value is interpolated into element content, so it must be escaped:
+ * `ov-slot-x="</mj-text><mj-raw><script>…"` would otherwise close the slot and
+ * inject into the delivered email. Escaping here is one-way — the value is
+ * never read back out as source — so it cannot compound.
  */
 function replaceSlotText(
   body: string,
   slotName: string,
   value: string
 ): { body: string; path: string } | null {
-  // Find the slot as an ATTRIBUTE, not as a substring: a plain indexOf also
-  // matches inside text content and inside other attributes' values.
-  let cursor = 0;
+  // Matched as an attribute, not a substring: a plain indexOf also hits text
+  // content and other attributes' values.
   let tag: ScannedTag | null = null;
-
-  while (cursor < body.length) {
-    const lt = body.indexOf("<", cursor);
-    if (lt === -1) break;
-    const m = /^<\s*([A-Za-z][\w-]*)/.exec(body.slice(lt));
-    if (!m) {
-      cursor = lt + 1;
-      continue;
+  try {
+    for (const candidate of scanTags(body)) {
+      const slot = candidate.attrs.find((a) => a.name === SLOT_ATTR);
+      if (slot?.value === slotName) {
+        tag = candidate;
+        break;
+      }
     }
-    let candidate: ScannedTag | null;
-    try {
-      candidate = findTag(body, m[1]!, lt);
-    } catch {
-      return null; // malformed body; the survivor guard reports the real issue
-    }
-    if (!candidate || candidate.start !== lt) {
-      cursor = lt + 1;
-      continue;
-    }
-    const slot = candidate.attrs.find((a) => a.name === SLOT_ATTR);
-    if (slot?.value === slotName) {
-      tag = candidate;
-      break;
-    }
-    cursor = candidate.end;
+  } catch {
+    return null; // the survivor guard reports the real issue
   }
 
   if (!tag) return null;
 
-  if (tag.selfClosing) {
-    // A self-closing slot element has no text content to replace. Converting it
-    // to a paired element would silently change the document shape, so refuse.
-    return null;
-  }
+  // Pairing up a self-closing slot would silently change the document shape.
+  if (tag.selfClosing) return null;
 
+  // The MATCHING close tag, not the first with that name.
   const end = findElementEnd(body, tag);
   if (end === null) return null;
   const close = body.lastIndexOf(`</`, end);
   if (close === -1 || close < tag.end) return null;
 
   const inner = body.slice(tag.end, close);
-  if (/<\s*[A-Za-z]/.test(inner)) {
-    // Element children present: this is not a text slot. Emptying it would
-    // silently delete the subtree.
-    return null;
-  }
+  if (/<\s*[A-Za-z]/.test(inner)) return null;
 
   const safe = value
     .replace(/&(?!(?:[A-Za-z][A-Za-z0-9]{1,31}|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});)/g, "&amp;")
@@ -528,25 +423,13 @@ function overridesOf(tag: ScannedTag): Map<string, string> {
 
 export interface ExpandOptions {
   /**
-   * Override the pinned revision per component. This is how a dry-run diff is
-   * produced: `expand(t, store)` vs `expand(t, store, { pins: {id: next} })`.
-   * Both sides are pure functions of stored data, so the diff is real
-   * before/after MJML rather than the string "revision 4 -> 5".
+   * Overrides the pinned revision per component, which is how a dry run is
+   * produced: `expand(t, store)` against `expand(t, store, { pins })` is a
+   * real before/after MJML diff rather than the string "revision 4 -> 5".
    */
   pins?: Record<string, number>;
 }
 
-/**
- * Expand every component reference in `source`.
- *
- * Note on the override model's known limit, surfaced here because this is where
- * an implementer will look: `ov-*` reaches the component ROOT and named text
- * slots only. If real templates need to override things BELOW the root (a
- * nested CTA's `href`, an unsubscribe link inside a footer), flat `ov-*` cannot
- * express it and `detach` becomes the routine path rather than an escape hatch.
- * §11 experiment (b) measures exactly that and HAS NOT BEEN RUN — it needs ten
- * real agency templates. Until it has, treat the override surface as provisional.
- */
 export function expand(
   source: string,
   store: ComponentStore,
@@ -555,17 +438,11 @@ export function expand(
   const regions: ExpansionRegion[] = [];
   const pins = opts.pins ?? {};
 
-  // Scan comments ONCE for the whole expansion. Every `findTag` call takes the
-  // result, so the document is not rescanned per reference — doing that made
-  // expansion ~4x slower on a 200-reference document, in the /api/render path
-  // that the preview pane hits on a 200ms keystroke debounce.
+  // Once for the whole expansion, and passed to every `findTag`: rescanning per
+  // reference made a 200-reference document ~4x slower.
   const scan = scanComments(source);
 
-  // An unterminated comment is only a problem if it could HIDE a reference —
-  // that is, if a reference sits at or after it. Throwing whenever the document
-  // merely CONTAINS the tag anywhere rejected templates whose references all
-  // precede the stray `<!--`, and even ones where the tag name appears only
-  // inside the comment text.
+  // Only a problem if it could HIDE a reference, i.e. one sits at or after it.
   if (scan.unterminatedAt !== undefined) {
     const hidden = source.indexOf(`<${COMPONENT_TAG}`, scan.unterminatedAt);
     if (hidden !== -1) throw new UnterminatedCommentError(scan.unterminatedAt);
@@ -573,9 +450,8 @@ export function expand(
 
   const out = expandInto(source, store, pins, regions, [], 0, scan.ranges);
 
-  // ---- throw-on-survivor: the guard, at the expander's exit ----
-  // Re-scan the OUTPUT: substitution changes the text, so the input's comment
-  // ranges do not describe it.
+  // The output is rescanned: substitution changed the text, so the input's
+  // comment ranges no longer describe it.
   const survivors = findSurvivors(out, scanComments(out).ranges);
   if (survivors.length > 0) {
     const detail = survivors
@@ -607,10 +483,9 @@ function expandInto(
     );
   }
 
-  // Rebuild left-to-right so recorded offsets are offsets into the OUTPUT,
-  // which is what the overlay join needs. Right-to-left splicing (as
-  // stampPaths does) would keep input offsets valid but leave every recorded
-  // region pointing into a string the caller never sees.
+  // Rebuilt left-to-right so recorded offsets index the OUTPUT. Right-to-left
+  // splicing would keep input offsets valid and leave every recorded region
+  // pointing into a string the caller never sees.
   let out = "";
   let cursor = 0;
 
@@ -646,38 +521,20 @@ function expandInto(
       overridesOf(tag),
       componentId
     );
-    // Strip AFTER overrides resolve (slot targeting still needs the markers)
-    // and BEFORE regions are recorded, so every recorded offset indexes the
-    // same bytes the caller receives.
+    // After overrides resolve, which still need the markers, and before regions
+    // are recorded, so every offset indexes the bytes the caller receives.
     const body = stripSlotMarkers(overridden);
 
     const siblingIdx = siblingIndexOf(source, tag.start, comments);
-    // `id@revision#siblingIndex`. The sibling index is what makes two INSTANCES
-    // of the same component distinguishable — without it, both entries in
-    // `<mj-column><mj-component c/><mj-component c/></mj-column>` produced the
-    // identical chain, and "which instance did I click" — the question this
-    // field exists to answer — had no answer.
     const chain = [...ancestry, `${componentId}@${revision}#${siblingIdx}`];
 
-    // Recurse BEFORE recording the region, so nested components are already
-    // substituted and this region's byte range covers its final content.
-    //
-    // Nested regions come back with offsets relative to the COMPONENT BODY,
-    // because the recursive call built its own output starting at 0. They must
-    // be rebased into this level's coordinate space or they point into a string
-    // no caller ever sees — the earlier version recorded them unrebased, so a
-    // nested region's `start` equalled its parent's and `mjml.slice(start, end)`
-    // did not contain the component.
+    // Recursion happens before the region is recorded, so this region's byte
+    // range covers its final, fully-substituted content.
     const nestedFrom = regions.length;
-    // The body is a different string, so it needs its own comment ranges.
-    //
-    // Its `unterminatedAt` is checked too, and that is not redundant with the
-    // publish-time check in `assertSingleRoot`: a ComponentStore is an
-    // interface, and a body can reach here from an implementation that never
-    // validated. This is the one failure the compiler-authority check in
-    // render.ts cannot catch — the reference DID expand, so mjml reports
-    // nothing, while the body's stray `<!--` silently truncates every template
-    // that references it.
+    // A different string, so it needs its own comment ranges — and its own
+    // unterminated check, which is not redundant with `assertSingleRoot`: a
+    // ComponentStore is an interface, and a body can arrive from an
+    // implementation that never validated.
     const bodyScan = scanComments(body);
     if (bodyScan.unterminatedAt !== undefined) {
       throw new UnterminatedCommentError(bodyScan.unterminatedAt);
@@ -697,11 +554,9 @@ function expandInto(
     out += expandedBody;
     const end = out.length;
 
-    // Width, not just depth. The depth cap alone bounds nothing useful: a chain
-    // where each component references the next N times expands to N^5 — at N=40
-    // that is ~10^8 nodes and the process dies with no diagnostic. Not reachable
-    // today (component bodies are deployer-authored), but it must be in place
-    // before a real store is wired into a route.
+    // Width, not just depth: a component referencing the next N times expands
+    // to N^5, which at N=40 is ~10^8 nodes and a process death with no
+    // diagnostic.
     if (out.length > MAX_EXPANDED_BYTES) {
       throw new ExpansionError(
         `Expansion exceeded ${MAX_EXPANDED_BYTES} bytes (chain: ${chain.join(" -> ")}). ` +
@@ -710,6 +565,8 @@ function expandInto(
       );
     }
 
+    // Nested regions came back with offsets into the component body, since the
+    // recursive call built its own output from 0.
     for (let i = nestedFrom; i < regions.length; i++) {
       const r = regions[i]!;
       r.start += start;
@@ -723,15 +580,6 @@ function expandInto(
       revision,
       instancePath: chain,
       overridable,
-      // Sibling index of this region's root among the top-level nodes THIS
-      // call emits. Single-root invariant: one reference substitutes to exactly
-      // one node, so the range is always [n, n]. Kept as a range on purpose —
-      // see the note on ExpansionRegion.
-      //
-      // This counts EMITTED SIBLINGS, not references. An earlier version used a
-      // counter over `<mj-component/>` tags alone, so in
-      // `<mj-text/><mj-component/>` the component reported index 0 while it is
-      // sibling 1 — breaking the path-to-path join the field exists to carry.
       expandedPathRange: [siblingIdx, siblingIdx],
     });
 

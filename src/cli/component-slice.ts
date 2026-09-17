@@ -1,20 +1,8 @@
 /**
- * Terminal driver for the component design system (plan §12, weeks 2-4).
+ * Terminal walkthrough of the component model: publish, bump a revision, show
+ * the dry-run diff, export, and report reachability.
  *
- * Scope is deliberately small and matches the build order: tool-authored
- * templates only, one component referenced from three of them, the expander,
- * the guard, a bulk expanded-MJML export, one revision bump, and the dry-run
- * diff printed to the terminal as expand(before) vs expand(after).
- *
- * **No UI, no brands table, no API refactor, no auth.** The deliverable is a
- * working expander and pin bump on your own machine — the thing you can put in
- * front of one real agency to find out whether the bet in §1 is true.
- *
- * Usage:
- *   npm run components -- demo        full walkthrough: publish, bump, diff, export
- *   npm run components -- diff        dry-run diff only
- *   npm run components -- export      write expanded MJML to ./workspace/expanded/
- *   npm run components -- report      reachability report only
+ *   npm run components -- [demo | diff | export | report]
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,40 +12,14 @@ import {
   locateInstances,
   ExpansionError,
 } from "../shared/components/index.js";
-
-// ---------------------------------------------------------------------------
-// Terminal helpers. No dependency — this runs in a plain terminal.
-// ---------------------------------------------------------------------------
-
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-const c = {
-  dim: (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s),
-  bold: (s: string) => (useColor ? `\x1b[1m${s}\x1b[0m` : s),
-  red: (s: string) => (useColor ? `\x1b[31m${s}\x1b[0m` : s),
-  green: (s: string) => (useColor ? `\x1b[32m${s}\x1b[0m` : s),
-  yellow: (s: string) => (useColor ? `\x1b[33m${s}\x1b[0m` : s),
-  cyan: (s: string) => (useColor ? `\x1b[36m${s}\x1b[0m` : s),
-};
-
-function heading(s: string): void {
-  console.log(`\n${c.bold(s)}\n${c.dim("─".repeat(Math.min(s.length, 72)))}`);
-}
+import { c, heading } from "./term.js";
 
 /**
- * Minimal positional line diff with context.
- *
- * Compares line i to line i, so any change in LINE COUNT between revisions
- * shifts everything after it and reports the remainder as changed. That is
- * acceptable here because the bodies compared are small and usually the same
- * shape — but it means a large diff signals a line-count change, NOT a broken
- * invariant.
- *
- * Specifically: D-2's one-attribute blast radius is about bytes rewritten in
- * STORED templates. This function shows EXPANDED MJML, where a revision bump is
- * expected to change the component body wholesale. The two quantities are
- * unrelated, and conflating them would send someone debugging a noisy diff
- * after the wrong invariant. The stored-side measurement is printed separately
- * below, and it is measured rather than asserted.
+ * Positional line diff: line i against line i, so a change in line count
+ * reports everything after it as changed. Fine for the small same-shaped
+ * bodies here, but it means a large diff signals a line-count change, not a
+ * broken invariant — the blast-radius measurement below is the separate,
+ * stored-side number.
  */
 function printDiff(before: string, after: string, context = 2): number {
   const a = before.split("\n");
@@ -91,10 +53,6 @@ function printDiff(before: string, after: string, context = 2): number {
   return changed.length;
 }
 
-// ---------------------------------------------------------------------------
-// The slice's fixture: one component, three tool-authored templates.
-// ---------------------------------------------------------------------------
-
 const COMPONENT_ID = "shoe-brand/primary-button";
 
 const BUTTON_V1 =
@@ -102,11 +60,7 @@ const BUTTON_V1 =
   `background-color="#1f6feb" color="#ffffff" border-radius="4px" ` +
   `font-size="16px" padding="12px 24px">Shop now</mj-button>`;
 
-/**
- * A composite component — image + copy + CTA. Experiment (b) measured exactly
- * this shape at mean 14.20 differing attributes with 100% of them below the
- * root, which is why below-root overrides exist.
- */
+/** The composite shape measured at 100% below-root variance. */
 const CARD_V1 =
   `<mj-column><mj-image src="https://cdn.shoe.test/hero.png" alt="Product" />` +
   `<mj-text font-size="16px">Our best seller</mj-text>` +
@@ -161,10 +115,6 @@ function buildStore(): InMemoryComponentStore {
   return store;
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
 function cmdReport(): void {
   heading("Reachability report");
   console.log(
@@ -206,8 +156,7 @@ function cmdReport(): void {
       c.dim(
         "\n  Note: unreachable instances still EXPAND correctly — reference\n" +
           "  substitutes a fixed-shape token and runs straight through an opaque\n" +
-          "  wrapper. Reachability limits per-instance addressing (the canvas\n" +
-          "  overlay), not rendering."
+          "  wrapper. Reachability limits per-instance addressing, not rendering."
       )
     );
   }
@@ -230,7 +179,6 @@ function cmdDiff(): number {
   const templates = makeTemplates(1);
   let totalChanged = 0;
 
-
   for (const t of templates) {
     const before = expand(t.mjml, store).mjml;
     const after = expand(t.mjml, store, {
@@ -241,9 +189,6 @@ function cmdDiff(): number {
   }
 
   heading("Blast radius (measured, not asserted)");
-  // Actually compute the stored-side delta rather than printing a claim. In a
-  // codebase that asks for explicit invariants, a hardcoded "0 bytes" styled as
-  // a result is the weaker half of the demo.
   let storedChangedLines = 0;
   let storedChangedChars = 0;
   for (const t of templates) {
@@ -330,7 +275,6 @@ function cmdDemo(): void {
         "gone. Two distinct refusals protect against that."
     )
   );
-  // (a) a pin with no such revision — ComponentNotFoundError.
   try {
     expand(makeTemplates(99)[0]!.mjml, store);
     console.log(c.red("  ✗ expected a refusal for a missing revision and got none"));
@@ -341,9 +285,8 @@ function cmdDemo(): void {
       );
     } else throw err;
   }
-  // (b) the throw-on-survivor guard itself, on a reference the substitution
-  // scanner cannot parse. This is the one the heading is really about, and an
-  // earlier version of this demo only ever exercised (a).
+  // The survivor guard itself, on a reference the substitution scanner cannot
+  // parse — the one the heading is really about.
   try {
     expand(
       `<mjml><mj-body><mj-component component-id="${COMPONENT_ID}" revision="1 /></mj-body></mjml>`,
@@ -363,7 +306,7 @@ function cmdDemo(): void {
   cmdExport();
   cmdReport();
 
-  heading("Below-root overrides — what experiment (b) forced");
+  heading("Below-root overrides — what the measurement forced");
   console.log(
     c.dim(
       "Measured over 39 real templates: composite shapes (image + copy + CTA)\n" +
@@ -398,18 +341,16 @@ function cmdDemo(): void {
   heading("What this slice does NOT do");
   console.log(
     c.dim(
-      "  · No UI, no brands table, no API scoping, no auth — all deferred (§12).\n" +
-        "  · §11 experiment (b) has now been run against 39 real public templates\n" +
-        "    (`npm run measure`), not against one agency's brand corpus. It came\n" +
-        "    back at mean 3.48 differing attributes with 38% below the root, which\n" +
-        "    is why below-root overrides exist. Re-run it on a REAL brand corpus\n" +
-        "    before treating the override surface as settled — a consistent brand\n" +
-        "    should measure lower than a gallery of varied showcases."
+      "  · No UI, no brands table, no API scoping, no auth.\n" +
+        "  · The override measurement has run against 39 real PUBLIC templates\n" +
+        "    (`npm run measure`), not one agency's brand corpus. It came back at\n" +
+        "    mean 3.48 differing attributes with 38% below the root, which is why\n" +
+        "    below-root overrides exist. Re-run it on a real brand corpus before\n" +
+        "    treating the override surface as settled — a consistent brand should\n" +
+        "    measure lower than a gallery of varied showcases."
     )
   );
 }
-
-// ---------------------------------------------------------------------------
 
 const cmd = process.argv[2] ?? "demo";
 try {

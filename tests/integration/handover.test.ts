@@ -1,12 +1,3 @@
-/**
- * src/cli/handover.ts — the whole paid job, end to end, on a temp dir.
- *
- * These assertions were previously carried by `render-expansion.test.ts`
- * against `POST /api/render`. The route is gone; the guards it protected moved
- * into the CLI, so the coverage moved with them. The bug they exist to prevent
- * is silent — an unexpanded reference compiles to a clean-looking email with a
- * block missing — so it is asserted directly rather than described.
- */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
@@ -23,7 +14,6 @@ function write(rel: string, body: string): void {
   writeFileSync(full, body);
 }
 
-/** Run the CLI; returns combined output plus the exit code. */
 function run(...args: string[]): { out: string; code: number } {
   try {
     const out = execFileSync("npx", ["tsx", CLI, job, ...args], {
@@ -40,14 +30,12 @@ function run(...args: string[]): { out: string; code: number } {
 
 const FOOTER = `<mj-section><mj-column><mj-text>Shoe Brand · 123 Old Street</mj-text></mj-column></mj-section>`;
 
-/** An original template with the footer written out inline. */
 const ORIGINAL =
   `<mjml><mj-body>` +
   `<mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section>` +
   FOOTER +
   `</mj-body></mjml>`;
 
-/** The same template with the footer replaced by a reference. */
 const REWIRED =
   `<mjml><mj-body>` +
   `<mj-section><mj-column><mj-text>Hello</mj-text></mj-column></mj-section>` +
@@ -71,13 +59,11 @@ describe("handover CLI", () => {
     expect(code).toBe(0);
     expect(out).toContain("1/1 byte-identical renders");
 
-    // plain-export must be the customer's own MJML back, with no trace of us.
     const plain = readFileSync(join(job, "plain-export", "welcome.mjml"), "utf8");
     expect(plain).toBe(ORIGINAL);
     expect(plain).not.toContain("mj-component");
     expect(plain).not.toContain("data-slot");
 
-    // proof/ needs both sides, or it proves nothing.
     expect(existsSync(join(job, "proof", "welcome.before.html"))).toBe(true);
     expect(existsSync(join(job, "proof", "welcome.after.html"))).toBe(true);
     expect(readFileSync(join(job, "proof", "REPORT.md"), "utf8")).toContain("identical");
@@ -103,7 +89,6 @@ describe("handover CLI", () => {
   });
 
   it("FAILS LOUDLY when a reference cannot be resolved, rather than shipping a gap", () => {
-    // No components/ entry for the id the template pins.
     write("components/shoe-brand/other.mjml", FOOTER);
     write("templates/welcome.mjml", REWIRED);
 

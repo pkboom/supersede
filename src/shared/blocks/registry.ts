@@ -1,29 +1,16 @@
-/**
- * Block registry — modeled-block metadata.
- *
- * **A-prime contract:** `allowedAttrs` is a UI-form view filter consumed by
- * `PropertiesForm.tsx` at form-render time. The parser is policy-free and
- * admits every attr it sees into the block's insertion-ordered `attrs:
- * Map<string, string>`; attrs not listed here round-trip silently and are
- * simply not surfaced in the right-panel form. The registry is NOT a
- * parse-time gate.
- *
- * `defaults` populates `attrs` for newly-created blocks (DnD from the icon
- * rail) — keys are inserted into the new Map in declaration order.
- */
 import type { BlockType } from "./types.js";
 
 export interface BlockDef {
   type: BlockType;
   label: string;
+  /** Seeds `attrs` for a newly-created block, in declaration order. */
   defaults: Record<string, string>;
   /**
-   * The set of attributes the canvas surfaces in its property panel.
-   * Attributes outside this list are still preserved verbatim if the source
-   * MJML carries them — see parser.ts and the A-prime contract above.
+   * An editor view filter, never a parse-time gate: the parser admits every
+   * attr it sees, and ones missing here still round-trip.
    */
   allowedAttrs: string[];
-  /** null means "this block is a leaf and accepts no children". */
+  /** null means the block is a leaf. */
   allowedChildren: BlockType[] | null;
   isContainer: boolean;
   /** If set, the block's inner text lives in `node.text`. */

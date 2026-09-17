@@ -1,15 +1,3 @@
-/**
- * blocks.passthrough.test — covers the 6 spec examples for A-prime lossless
- * passthrough.
- *
- * Each example asserts:
- *  1. Parse classifies the node as the expected variant
- *     (`mj-custom-passthrough` for unmodeled tags, `__unknown__` for HTML
- *     comments, attrs Map for unmodeled attrs on modeled tags).
- *  2. Serialize → parse a second time still yields the same variant
- *     (round-trip stability).
- *  3. The whitespace-normalized round-trip is byte-equal to the input.
- */
 import { describe, it, expect } from "vitest";
 import { parseMjml, serializeMjml } from "../../src/shared/blocks/index.js";
 import { normalizeWhitespace } from "../../src/shared/blocks/roundTrip.js";
@@ -46,7 +34,6 @@ describe("A-prime passthrough — 6 spec examples", () => {
   it("(1) <mj-style> in mj-head is preserved verbatim (head opaque rawXml round-trips)", () => {
     const src = `<mjml><mj-head><mj-style>.x { color: red }</mj-style></mj-head><mj-body><mj-section><mj-column><mj-text>hi</mj-text></mj-column></mj-section></mj-body></mjml>`;
     const doc = parseMjml(src);
-    // mj-head is preserved opaquely on the document — its rawXml must contain mj-style.
     expect(doc.head?.rawXml ?? "").toContain("<mj-style>");
     expect(doc.head?.rawXml ?? "").toContain(".x { color: red }");
     const out = serializeMjml(doc);
@@ -113,7 +100,6 @@ describe("A-prime passthrough — 6 spec examples", () => {
     const comment = findFirst(doc.body, isUnknown);
     expect(comment).toBeDefined();
     expect(comment!.rawXml).toContain("<!-- top comment -->");
-    // Crucially: it must NOT be a mj-custom-passthrough.
     const passthrough = findFirst(doc.body, isCustomPassthrough);
     expect(passthrough).toBeUndefined();
     const out = serializeMjml(doc);

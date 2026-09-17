@@ -1,12 +1,3 @@
-/**
- * Bulk expanded-MJML export — the escape hatch (plan §12, weeks 2-4).
- *
- * The export exists so the corpus outlives this tool: if the expander is buggy
- * or the company disappears, every template is still plain, portable MJML. That
- * promise is only worth something if the exported files actually COMPILE, with
- * no references left in them — so this asserts compilation, not just that a
- * string was written.
- */
 import { describe, it, expect } from "vitest";
 import mjml2html from "mjml";
 import {
@@ -72,7 +63,6 @@ describe("expanded export is portable MJML", () => {
   }
 
   it("preserves an entity-bearing tracking URL through export", () => {
-    // The §0.2 corruption would have compounded here, once per export.
     const { mjml } = expand(template(ref(1)), store());
     expect(mjml).toContain("utm_source=email&amp;utm_medium=cta");
     expect(mjml).not.toContain("&amp;amp;");
@@ -85,8 +75,6 @@ describe("expanded export is portable MJML", () => {
   });
 
   it("an exported file no longer depends on the store at all", () => {
-    // The actual escape-hatch property: re-expanding the EXPORTED output
-    // against an EMPTY store must succeed, because nothing references anything.
     const { mjml } = expand(template(ref(1)), store());
     expect(() => expand(mjml, new InMemoryComponentStore())).not.toThrow();
   });

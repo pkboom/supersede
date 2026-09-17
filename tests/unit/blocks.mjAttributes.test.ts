@@ -1,8 +1,3 @@
-/**
- * blocks.mjAttributes — get/set helpers for `<mj-attributes>` defaults
- * inside `<mj-head>`. Covers the create-block, create-element,
- * update-attr, insert-attr, and self-close-vs-explicit-close paths.
- */
 import { describe, it, expect } from "vitest";
 import {
   deleteMjAttribute,

@@ -1,41 +1,22 @@
-/**
- * Round-trip helper module — relocated from `src/server/fidelity.ts:24-49`.
- *
- * Purpose: shared `normalizeWhitespace` + an `assertRoundTrip` helper used by
- * property tests. NO server runtime path consumes this — the runtime
- * fidelity gate is being deleted (Lane C). After A-prime lossless passthrough
- * lands, `parse` then `serialize` is byte-equal modulo whitespace for any
- * input, so the assertion below is a useful guard for property tests but no
- * longer a gating runtime check.
- */
 import { parseMjml } from "./parser.js";
 import { serializeMjml } from "./serializer.js";
 
 /**
- * Collapse whitespace runs *outside of* `<mj-text>` / `<mj-button>` content,
- * so cosmetic indentation differences between input and serializer output
- * don't trigger a false-positive lossy result. Inside text content we keep
- * the literal whitespace so user-visible formatting is meaningful.
+ * Collapse whitespace outside `<mj-text>` / `<mj-button>` content so cosmetic
+ * indentation differences don't read as a lossy round trip; inside them
+ * whitespace is user-visible and kept.
  *
- * Strict-between-tags rule (Lane B addition): outside protected ranges, also
- * strip whitespace that sits *strictly between two tags* (`>` followed by
- * whitespace followed by `<`). Without this, a flush input `<a><b>` and an
- * indented input `<a>\n  <b>` normalize to different strings (the former
- * stays `<a><b>`, the latter becomes `<a> <b>`), which breaks the round-trip
- * property test for sources that happen to have no inter-tag whitespace.
+ * Idempotent, and must stay so: callers compare normalized strings against
+ * already-normalized ones.
  */
 export function normalizeWhitespace(source: string): string {
-  // Splice out content of mj-text and mj-button so we don't normalize their text.
-  // The match boundary trick — `lastIndexOf("<", m.index + m[0].length)` —
-  // breaks when the very next char after the close tag is `<` of a SIBLING
-  // close tag (e.g. `</mj-text></mj-column>`): lastIndexOf returns the
-  // sibling's `<` instead of the in-match close. Use `m[0].length - 1` so we
-  // search strictly within the match.
   const protectedRanges: Array<{ start: number; end: number; body: string }> = [];
   const re = /<\s*(mj-text|mj-button)\b[^>]*>([\s\S]*?)<\s*\/\s*\1\s*>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
     const bodyStart = source.indexOf(">", m.index) + 1;
+    // Search strictly within the match: `m.index + m[0].length` would find the
+    // `<` of a tightly-packed sibling close tag (`</mj-text></mj-column>`).
     const closeStart = source.lastIndexOf("<", m.index + m[0]!.length - 1);
     protectedRanges.push({
       start: bodyStart,
@@ -43,24 +24,14 @@ export function normalizeWhitespace(source: string): string {
       body: source.slice(bodyStart, closeStart),
     });
   }
-  // Rebuild: outside protected ranges → collapse whitespace; inside → keep.
   function collapseOutside(s: string): string {
     return s
-      .replace(/>\s+</g, "><") // strip inter-tag whitespace entirely
-      .replace(/\s+/g, " ") // collapse remaining runs to single space
+      // Strip inter-tag whitespace entirely, so `<a><b>` and `<a>\n  <b>`
+      // normalize alike.
+      .replace(/>\s+</g, "><")
+      .replace(/\s+/g, " ")
       .trim();
   }
-  //
-  // Idempotency (plan §0.3): an earlier version appended a literal `" "` on
-  // BOTH sides of every protected body. Both sides of `assertRoundTrip` are
-  // normalized exactly once, so the padding cancelled and the bug was invisible
-  // there — but it made `normalizeWhitespace` non-idempotent: each call grew
-  // every protected range by two characters
-  // (`<mj-text>hi</mj-text>` -> `<mj-text> hi </mj-text>` -> `<mj-text>  hi  </mj-text>`).
-  // Anything comparing a normalized string against an already-normalized one
-  // silently disagreed. The separator was never needed: a protected body is
-  // bounded by the `>` and `<` of its own tags, so it cannot run together with
-  // the collapsed text around it.
   let out = "";
   let i = 0;
   for (const r of protectedRanges) {
@@ -72,10 +43,6 @@ export function normalizeWhitespace(source: string): string {
   return out.trim();
 }
 
-/**
- * Property-test helper: parse → serialize → compare. Throws an Error with a
- * useful message on mismatch so test output points at the specific input.
- */
 export function assertRoundTrip(source: string): void {
   const parsed = parseMjml(source);
   const emitted = serializeMjml(parsed);

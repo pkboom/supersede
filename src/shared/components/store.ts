@@ -1,12 +1,3 @@
-/**
- * In-memory component store of immutable revisions (plan §12, weeks 2-4).
- *
- * Deliberately NOT a database table. The vertical slice is terminal-only and
- * explicitly scoped "no brands table, no API refactor, no auth" — components
- * get persisted properly once one real agency has actually used the model, so
- * the schema is shaped by what they needed rather than by what we guessed.
- * Serialising to JSON is enough to run a migration by hand today.
- */
 import {
   COMPONENT_TAG,
   type ComponentRevision,
@@ -22,12 +13,9 @@ import {
 } from "./tagScan.js";
 
 /**
- * Validate the single-root invariant.
- *
- * This is enforced at PUBLISH time, not at expansion time, and that placement
- * is deliberate: a violation caught here names the component the author is
- * editing, while the same violation caught during expansion surfaces as a
- * confusing failure in an unrelated template that merely references it.
+ * Checked at publish time rather than expansion time, so a violation names the
+ * component being edited instead of surfacing in an unrelated template that
+ * merely references it.
  */
 export function assertSingleRoot(componentId: string, body: string): void {
   const trimmed = body.trim();
@@ -35,12 +23,10 @@ export function assertSingleRoot(componentId: string, body: string): void {
     throw new ExpansionError(`Component "${componentId}" has an empty body`);
   }
 
-  // An unterminated comment in a component BODY is worse than one in a
-  // template: the body is substituted into every template that references it,
-  // so one bad publish silently truncates all of them — and because the
-  // reference itself expanded, mjml reports nothing and the compiler-authority
-  // check has nothing to fire on. Catch it at publish time, where the error can
-  // name the component being edited.
+  // An unterminated comment here is worse than one in a template: the body is
+  // substituted into every template referencing it, so one bad publish
+  // truncates all of them, and mjml reports nothing because the reference did
+  // expand.
   const scan = scanComments(trimmed);
   if (scan.unterminatedAt !== undefined) {
     throw new UnterminatedCommentError(scan.unterminatedAt);
@@ -53,14 +39,12 @@ export function assertSingleRoot(componentId: string, body: string): void {
     );
   }
 
-  // The root must span the whole body. If anything but whitespace follows it,
-  // there is a second root.
+  // The root must span the whole body; anything but whitespace after it is a
+  // second root.
   const end = findElementEnd(trimmed, root);
   if (end === null) {
     throw new ExpansionError(
-      `Component "${componentId}" body has an unclosed <${root.name}> root. ` +
-        `(An earlier implementation treated "never closed" as "closes at the end", ` +
-        `which made this check pass vacuously for exactly the malformed bodies it exists to reject.)`
+      `Component "${componentId}" body has an unclosed <${root.name}> root`
     );
   }
   const tail = trimmed.slice(end);
@@ -73,6 +57,11 @@ export function assertSingleRoot(componentId: string, body: string): void {
   }
 }
 
+/**
+ * Not a database table on purpose: components get persisted once a real agency
+ * has used the model, so the schema is shaped by what they needed. Serialising
+ * to JSON is enough to hand-migrate today.
+ */
 export class InMemoryComponentStore implements ComponentStore {
   /** componentId -> revision number -> revision. */
   private readonly byId = new Map<string, Map<number, ComponentRevision>>();
@@ -98,15 +87,9 @@ export class InMemoryComponentStore implements ComponentStore {
   }
 
   /**
-   * Publish a new immutable revision. Returns it.
-   *
-   * Revisions are append-only: the number is ALLOCATED here (max + 1) and
-   * cannot be supplied by the caller, so an existing revision can never be
-   * overwritten through this method. That matters because a template pinned to
-   * a revision would otherwise change content without its pin moving — exactly
-   * the property the reference model exists to prevent.
-   *
-   * `fromJSON` is the path that CAN violate this, and it validates separately.
+   * The revision number is allocated here and cannot be supplied, so this can
+   * never overwrite an existing one — a pinned template would otherwise change
+   * content without its pin moving.
    */
   publish(
     componentId: string,
@@ -115,9 +98,8 @@ export class InMemoryComponentStore implements ComponentStore {
   ): ComponentRevision {
     assertSingleRoot(componentId, body);
 
-    // A component body may reference other components, but it must not
-    // reference ITSELF — that is an unconditional infinite expansion the depth
-    // cap would only convert into a confusing error later.
+    // A body may reference other components but not itself, which the depth cap
+    // would only turn into a confusing error later.
     for (const tag of findAllTags(body, COMPONENT_TAG)) {
       const id = tag.attrs.find((a) => a.name === "component-id")?.value;
       if (id === componentId) {
@@ -151,14 +133,10 @@ export class InMemoryComponentStore implements ComponentStore {
     }));
   }
 
-  /**
-   * Rehydrate from JSON.
-   *
-   * This is the hand-migration entry point, which makes it the one path that
-   * can violate every invariant `publish()` enforces — so it re-checks them
-   * rather than trusting the file. An earlier version coerced blindly
-   * (`String(undefined)` becoming the literal `"undefined"` as a body) and
-   * silently overwrote duplicate revisions.
+/**
+   * The hand-migration entry point, and so the one path that can violate every
+   * invariant `publish` enforces — hence the re-checks rather than trusting
+   * the file.
    */
   static fromJSON(raw: unknown): InMemoryComponentStore {
     const store = new InMemoryComponentStore();

@@ -1,16 +1,3 @@
-/**
- * blocks.attrsHelpers.test — covers `setAttr`, `deleteAttr`, `getAttr` from
- * `src/shared/blocks/attrsHelpers.ts`.
- *
- * Insertion-order invariants under test:
- *   - On UPDATE of an existing key, iteration order is unchanged.
- *   - On INSERT of a new key, the entry is appended.
- *   - On DELETE, remaining keys preserve their relative order.
- *
- * The property test uses fast-check to randomly drive a sequence of
- * insert/update/delete operations and compares the helper-driven Map's
- * iteration order to a reference list maintained by hand.
- */
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 import {
@@ -34,7 +21,6 @@ describe("attrsHelpers (deterministic)", () => {
     setAttr(m, "b", "2");
     setAttr(m, "c", "3");
     setAttr(m, "b", "BEE");
-    // Order unchanged; value updated.
     expect([...m.keys()]).toEqual(["a", "b", "c"]);
     expect(getAttr(m, "b")).toBe("BEE");
   });
@@ -59,14 +45,10 @@ describe("attrsHelpers (deterministic)", () => {
     setAttr(m, "a", "1");
     setAttr(m, "b", "2");
     deleteAttr(m, "a");
-    setAttr(m, "a", "1.b"); // re-insert: appended.
+    setAttr(m, "a", "1.b");
     expect([...m.keys()]).toEqual(["b", "a"]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Property test: random insert/update/delete sequences
-// ---------------------------------------------------------------------------
 
 type Op =
   | { kind: "set"; key: string; value: string }
@@ -92,10 +74,6 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
   fc.record({ kind: fc.constant<"del">("del"), key: keyArb })
 );
 
-/**
- * Reference implementation: maintains an ordered list of keys + a value-bag.
- * Used to verify the Map's iteration order matches the spec.
- */
 function applyOpsRef(ops: Op[]): { keys: string[]; values: Map<string, string> } {
   const keys: string[] = [];
   const values = new Map<string, string>();
@@ -127,13 +105,11 @@ describe("attrsHelpers (property)", () => {
           }
         }
         const ref = applyOpsRef(ops);
-        // Same iteration order, same set of keys.
         const observed = [...m.keys()];
         if (observed.length !== ref.keys.length) return false;
         for (let i = 0; i < observed.length; i++) {
           if (observed[i] !== ref.keys[i]) return false;
         }
-        // Same value at every key.
         for (const k of ref.keys) {
           if (getAttr(m, k) !== ref.values.get(k)) return false;
         }

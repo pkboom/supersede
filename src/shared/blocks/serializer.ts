@@ -1,10 +1,3 @@
-/**
- * Block-tree → MJML serializer.
- *
- * BlockNodes are emitted as clean `<mj-foo attr="val">…</mj-foo>` with
- * 2-space indentation. UnknownNodes emit their `rawXml` verbatim, which is
- * what guarantees byte-equality round-trip for unmodeled constructs.
- */
 import type {
   BlockNode,
   CustomPassthroughNode,
@@ -15,53 +8,18 @@ import type {
 import { BLOCK_REGISTRY } from "./registry.js";
 
 /**
- * Escape an attribute value for emission.
+ * An `&` that does not already open a character reference.
  *
- * **Escaping is IDEMPOTENT, not absent (plan §0.2, as corrected).** The parser runs
- * fast-xml-parser with `processEntities: false`, so a value arrives holding the
- * LITERAL SOURCE CHARACTERS — source `&amp;` is five characters in the Map, not
- * one `&`. Re-escaping `&` here therefore had no inverse anywhere and compounded
- * once per save, +4 characters per generation, forever:
+ * Escaping here has to be IDEMPOTENT, because two kinds of value flow through
+ * it. A value parsed from source holds its entities as literal characters
+ * (`processEntities: false`), so re-escaping its `&` would compound it by four
+ * characters per save, forever. A value written programmatically holds a raw
+ * `&` and a raw `<`, and leaving those alone truncates the document at the
+ * `<` on the next parse. Skipping the `&` that is already an entity satisfies
+ * both: each reaches a fixpoint after one pass.
  *
- *     gen 0: href="/x?a=1&amp;b=2"
- *     gen 1: href="/x?a=1&amp;amp;b=2"
- *     gen 2: href="/x?a=1&amp;amp;amp;b=2"
- *
- * The trigger was every UTM tracking URL and every `&` in body copy.
- *
- * **The first fix for this went too far and opened a worse hole.** It dropped
- * escaping entirely, on evidence gathered from source round-trips alone. But
- * `node.text` and `attrs` are ALSO written programmatically — the inline canvas
- * editor assigns raw `textContent`, and the properties form assigns raw input
- * values. With escaping removed, typing `a < b` into a text block serialized to
- * `<mj-text>a < b</mj-text>`, which re-parses to `"a "` — everything after the
- * `<` silently destroyed and then persisted. Typing `</mj-text><script>` broke
- * the document structure outright. That is strictly worse than the entity bug
- * it replaced: the entity bug was linear and reversible; this was immediate and
- * unrecoverable.
- *
- * The correct fix escapes what must be escaped, but does so IDEMPOTENTLY, so
- * both the source path and the write path reach a fixpoint. See
- * BARE_AMPERSAND.
- *
- * NOT to be unified with `escapeHtml` in `headEdit.ts:59-61`, which
- * double-escapes DELIBERATELY under a different contract and is asserted at
- * `blocks.headEdit.test.ts:70`. Identical-looking code, opposite requirement.
- */
-/**
- * Matches an `&` that does NOT already begin a character reference. This is
- * what makes escaping IDEMPOTENT, which is the property the whole round-trip
- * gate rests on:
- *
- *   - a value parsed from source holds `&amp;` as five literal characters
- *     (processEntities:false). The `&` is followed by `amp;`, so it is left
- *     alone and the value round-trips byte-equal.
- *   - a value written programmatically — the inline editor, the properties
- *     form, the component expander — holds a raw `&`. Nothing follows it that
- *     looks like an entity, so it IS escaped, and the NEXT pass leaves the
- *     result alone.
- *
- * Both paths reach a fixpoint at generation 1.
+ * Do not unify with `escapeHtml` in `headEdit.ts`, which double-escapes
+ * deliberately under the opposite contract.
  */
 const BARE_AMPERSAND =
   /&(?!(?:[A-Za-z][A-Za-z0-9]{1,31}|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});)/g;
@@ -74,15 +32,8 @@ function escapeAttrValue(v: string): string {
 }
 
 /**
- * Escape text content, idempotently (see BARE_AMPERSAND).
- *
- * `<` must always be escaped: a raw `<` cannot occur in text parsed from source
- * (it would have opened a tag), so escaping it only ever affects the write path
- * — where leaving it raw silently truncates the document at that character.
- *
- * `>` is deliberately NOT escaped. It is harmless in text content, and escaping
- * it would rewrite every source document that legitimately contains one,
- * breaking the byte-equal round-trip for no safety gain.
+ * `>` is deliberately left alone: harmless in text content, and escaping it
+ * would rewrite every source document that legitimately contains one.
  */
 function escapeText(v: string): string {
   return v.replace(BARE_AMPERSAND, "&amp;").replace(/</g, "&lt;");
@@ -94,9 +45,6 @@ function indent(level: number): string {
 
 function serializeAttrs(attrs: Map<string, string>): string {
   if (attrs.size === 0) return "";
-  // Iterate in insertion order (Map iteration is insertion-ordered per spec).
-  // Per A-prime, this order IS the source order — no two-phase
-  // "known-then-unknown" emission.
   const parts: string[] = [];
   for (const [k, v] of attrs) {
     parts.push(`${k}="${escapeAttrValue(v)}"`);
@@ -109,7 +57,6 @@ function serializeBlock(node: BlockNode, level: number): string {
   const ind = indent(level);
   const attrsStr = serializeAttrs(node.attrs);
 
-  // Container with children
   if (def.isContainer) {
     const children = node.children ?? [];
     if (children.length === 0) {
@@ -121,35 +68,24 @@ function serializeBlock(node: BlockNode, level: number): string {
     return `${ind}<${node.type}${attrsStr}>\n${inner}\n${ind}</${node.type}>`;
   }
 
-  // Leaf with text content
   if (def.contentField === "text" && node.text != null) {
     return `${ind}<${node.type}${attrsStr}>${escapeText(node.text)}</${node.type}>`;
   }
 
-  // Leaf without text
   return `${ind}<${node.type}${attrsStr} />`;
 }
 
-function serializeUnknown(node: UnknownNode, level: number): string {
-  // Prepend the requested indent on the first line; preserve internal lines as-is.
-  return `${indent(level)}${node.rawXml}`;
-}
-
-function serializePassthrough(
-  node: CustomPassthroughNode,
+/** Verbatim re-emission — the round-trip guarantee for unmodeled MJML. */
+function serializeRaw(
+  node: UnknownNode | CustomPassthroughNode,
   level: number
 ): string {
-  // Verbatim re-emission of the captured slice — this is the round-trip
-  // guarantee for unmodeled MJML constructs.
   return `${indent(level)}${node.rawXml}`;
 }
 
 function serializeNode(node: TreeNode, level: number): string {
-  if (node.type === "__unknown__") {
-    return serializeUnknown(node, level);
-  }
-  if (node.type === "mj-custom-passthrough") {
-    return serializePassthrough(node, level);
+  if (node.type === "__unknown__" || node.type === "mj-custom-passthrough") {
+    return serializeRaw(node, level);
   }
   return serializeBlock(node, level);
 }
@@ -162,8 +98,6 @@ export function serializeMjml(doc: MjmlDocument): string {
   lines.push(`<mjml${wrapperAttrs}>`);
 
   if (doc.head) {
-    // Preserve mj-head verbatim, indented one level. Round-trip fidelity is
-    // what matters — we don't try to re-indent inner head lines.
     lines.push(`${indent(1)}${doc.head.rawXml}`);
   }
 

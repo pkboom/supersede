@@ -1,50 +1,13 @@
 /**
- * String-slice editor for `<mj-attributes>` defaults inside `<mj-head>`'s
- * `rawXml`. Used by the right-panel "Settings" tab to set design defaults
- * (e.g. default font family, default text color, default link color)
- * without round-tripping through fast-xml-parser.
+ * Slice edits to `<mj-attributes>` defaults inside an `<mj-head>` rawXml:
  *
- * MJML's `<mj-attributes>` block lets you declare per-element-type
- * defaults inside the head, e.g.:
+ *   <mj-attributes>
+ *     <mj-all font-family="Arial, sans-serif" />
+ *     <mj-text color="#333333" />
+ *   </mj-attributes>
  *
- *   <mj-head>
- *     <mj-attributes>
- *       <mj-all font-family="Arial, sans-serif" />
- *       <mj-text color="#333333" line-height="1.5" />
- *       <a color="#1f6feb" />
- *     </mj-attributes>
- *   </mj-head>
- *
- * `getMjAttribute(headRaw, "mj-text", "color")` reads the current value;
- * `setMjAttribute(headRaw, "mj-text", "color", "#000000")` writes it.
- *
- * Algorithm (mirrors headEdit.ts indexOf-style slicing):
- *  1. Locate `<mj-attributes>...</mj-attributes>` inside the head. If
- *     missing, insert one immediately after `<mj-head>`'s open tag with
- *     a single child `<{element} {attr}="{value}" />`.
- *  2. Within mj-attributes' inner range, locate the first `<{element}`
- *     open tag (with strict `[\s/>]` lookahead so `mj-text` doesn't match
- *     `mj-text-extra`, etc.). If missing, insert
- *     `<{element} {attr}="{value}" />` immediately after the
- *     mj-attributes open tag.
- *  3. Within the element's open tag, find `attr="..."`. If present,
- *     slice-replace its quoted value. If absent, insert the new attr
- *     immediately before the closing `>` or `/>`, padded with whitespace
- *     so the emitted tag stays well-formed (e.g. `<mj-text foo="bar" />`,
- *     not `<mj-text foo="bar"/>`).
- *
- * Quote handling: only `"..."` (double-quoted) is supported on write.
- * Reading also accepts only double-quoted values; single-quoted
- * attributes are rare in MJML output and would simply read as missing.
- *
- * Validation: `element` is restricted to `^[a-zA-Z][\\w-]*$` (handles
- * `mj-all`, `mj-text`, `mj-button`, plain `a`, etc.). `attr` is
- * restricted to `^[a-zA-Z][\\w:-]*$`. Invalid names short-circuit
- * (get returns `""`, set returns the input unchanged).
- *
- * Values are HTML-attribute-escaped on write: `&` → `&amp;`,
- * `"` → `&quot;`, `<` → `&lt;`. Read returns the raw quoted slice
- * (caller decodes if needed).
+ * Missing containers are created on write. Only double-quoted values are
+ * read or written; a single-quoted one simply reads as missing.
  */
 
 const ELEMENT_NAME_RE = /^[a-zA-Z][\w-]*$/;
@@ -58,10 +21,7 @@ function escapeAttr(v: string): string {
   return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-/**
- * Find `<{tag}` where the next char after the tag name is whitespace,
- * `/`, or `>`. Returns the offset of `<`, or `-1` if not found.
- */
+/** Requires whitespace, `/` or `>` after the name, so `mj-text-extra` misses. */
 function findOpenTag(xml: string, tag: string, fromIdx = 0): number {
   const re = new RegExp(`<${escapeRe(tag)}(?=[\\s/>])`, "g");
   re.lastIndex = fromIdx;
@@ -70,22 +30,16 @@ function findOpenTag(xml: string, tag: string, fromIdx = 0): number {
 }
 
 interface TagLocation {
-  /** Offset of `<` of the open tag. */
   tagOpenStart: number;
-  /** Offset just after the `>` (or `/>`) of the open tag. */
+  /** Offset just past the `>` or `/>` of the open tag. */
   openEnd: number;
   isSelfClose: boolean;
-  /** Offset of inner content start (== openEnd). null if self-closing. */
+  /** Both null when self-closing. */
   innerStart: number | null;
-  /** Offset of `<` of the matching close tag. null if self-closing. */
   innerEnd: number | null;
 }
 
-/**
- * Locate `<{tag}>...</{tag}>` (or self-closing `<{tag} />`) starting from
- * `fromIdx`. Tolerates quoted attribute values containing `>` / `/`.
- * Tracks depth for nested same-name tags.
- */
+/** Quote-aware and depth-tracking, so `>` in a value and nesting are safe. */
 function locateTag(
   xml: string,
   tag: string,
@@ -129,7 +83,6 @@ function locateTag(
     };
   }
 
-  // Walk forward tracking depth so nested same-name tags balance correctly.
   const openRe = new RegExp(`<${escapeRe(tag)}(?=[\\s/>])`, "g");
   const closeRe = new RegExp(`</${escapeRe(tag)}\\s*>`, "g");
   let depth = 1;
@@ -160,38 +113,24 @@ function locateTag(
   return null;
 }
 
-interface AttrMatch {
-  /** Offset of the first character of the attribute value (inside quotes). */
-  valueStart: number;
-  /** Offset of the closing quote. */
-  valueEnd: number;
-}
-
-/** Find `attr="..."` inside [openStart, openEnd). Whitespace-bounded so
- * we don't match attribute names that appear as substrings of values. */
+/** Whitespace-bounded, so an attr name appearing inside a value never matches. */
 function findAttr(
   xml: string,
   attr: string,
   openStart: number,
   openEnd: number
-): AttrMatch | null {
+): { valueStart: number; valueEnd: number } | null {
   const re = new RegExp(`(?:\\s)${escapeRe(attr)}\\s*=\\s*"([^"]*)"`, "g");
   re.lastIndex = openStart;
   const m = re.exec(xml);
   if (!m) return null;
   if (m.index >= openEnd) return null;
   if (re.lastIndex > openEnd) return null;
-  // Find the offsets of the opening and closing quote.
-  // m[1] is the captured value; its length tells us where the quotes sit.
   const quoteOpen = xml.indexOf('"', m.index);
   return { valueStart: quoteOpen + 1, valueEnd: quoteOpen + 1 + m[1]!.length };
 }
 
-/**
- * Read `<{element} {attr}="...">` from `<mj-attributes>` inside
- * `headRawXml`. Returns the raw quoted slice, or `""` if the head is
- * missing the mj-attributes block, the element, or the attribute.
- */
+/** The raw quoted slice, or `""` if any level of it is missing. */
 export function getMjAttribute(
   headRawXml: string,
   element: string,
@@ -218,15 +157,7 @@ export function getMjAttribute(
   return headRawXml.slice(found.valueStart, found.valueEnd);
 }
 
-/**
- * Set (insert or update) `<{element} {attr}="..."/>` inside
- * `<mj-attributes>` in `headRawXml`. Creates the mj-attributes block
- * and/or the element node as needed. Returns the new headRawXml.
- *
- * If `headRawXml` carries no `<mj-head>` open tag, returns a freshly
- * wrapped head containing only the requested default — defensive
- * fallback for callers that pass raw fragments.
- */
+/** Invalid element or attr names are a no-op rather than an error. */
 export function setMjAttribute(
   headRawXml: string,
   element: string,
@@ -238,7 +169,6 @@ export function setMjAttribute(
 
   const escaped = escapeAttr(value);
 
-  // 1. Find or create the mj-attributes block inside mj-head.
   const mjAttrs = locateTag(headRawXml, "mj-attributes");
   if (!mjAttrs || mjAttrs.innerStart === null || mjAttrs.innerEnd === null) {
     const headOpen = findOpenTag(headRawXml, "mj-head");
@@ -255,7 +185,6 @@ export function setMjAttribute(
     );
   }
 
-  // 2. Find or create the element inside mj-attributes.
   const elem = locateTag(headRawXml, element, mjAttrs.innerStart);
   if (!elem || elem.tagOpenStart >= mjAttrs.innerEnd) {
     return (
@@ -265,8 +194,6 @@ export function setMjAttribute(
     );
   }
 
-  // 3. Replace existing attr value, or insert a new attr inside the
-  //    element's open tag.
   const found = findAttr(headRawXml, attr, elem.tagOpenStart, elem.openEnd);
   if (found) {
     return (
@@ -276,12 +203,11 @@ export function setMjAttribute(
     );
   }
 
+  // Padded so the emitted tag stays `<x foo="v" />`, not `<x foo="v"/>`.
   const insertAt = elem.isSelfClose ? elem.openEnd - 2 : elem.openEnd - 1;
   const before = headRawXml[insertAt - 1] ?? "";
   const leadingSpace =
     before === " " || before === "\t" || before === "\n" ? "" : " ";
-  // For self-closing tags, ensure there is a space before `/>`:
-  // we want `<x foo="v" />`, not `<x foo="v"/>`.
   const trailing = elem.isSelfClose ? " " : "";
   return (
     headRawXml.slice(0, insertAt) +
@@ -290,12 +216,7 @@ export function setMjAttribute(
   );
 }
 
-/**
- * Remove `<{element} ... {attr}="..." ...>` from `<mj-attributes>`.
- * Leaves the element node in place even if it becomes attribute-less
- * (e.g. `<mj-text />`); higher-level UI is responsible for any further
- * cleanup. No-op if mj-attributes, the element, or the attr is missing.
- */
+/** Leaves the element behind even once it is attribute-less. */
 export function deleteMjAttribute(
   headRawXml: string,
   element: string,
@@ -312,9 +233,8 @@ export function deleteMjAttribute(
   const elem = locateTag(headRawXml, element, mjAttrs.innerStart);
   if (!elem || elem.tagOpenStart >= mjAttrs.innerEnd) return headRawXml;
 
-  // Remove preceding whitespace + the attr declaration so we don't leave
-  // a double-space behind. Anchored to the open-tag range so we don't
-  // accidentally chew through inner text content.
+  // Takes the preceding whitespace too, and is bounded to the open tag so it
+  // cannot chew into inner text.
   const re = new RegExp(`(\\s+)${escapeRe(attr)}\\s*=\\s*"[^"]*"`, "g");
   re.lastIndex = elem.tagOpenStart;
   const m = re.exec(headRawXml);
