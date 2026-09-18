@@ -1,10 +1,5 @@
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-
-const wrap =
-  (code: number) =>
-  (s: string): string =>
-    useColor ? `\x1b[${code}m${s}\x1b[0m` : s;
-
+const wrap = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
 export const c = {
   bold: wrap(1),
   dim: wrap(2),
@@ -13,7 +8,6 @@ export const c = {
   yellow: wrap(33),
   cyan: wrap(36),
 };
-
-export function heading(s: string, width = 72): void {
+export function heading(s, width = 72) {
   console.log(`\n${c.bold(s)}\n${c.dim("─".repeat(Math.min(s.length, width)))}`);
 }

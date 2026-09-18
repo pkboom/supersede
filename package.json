@@ -9,19 +9,15 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "handover": "tsx src/cli/handover.ts",
-    "scan": "tsx src/cli/scan.ts"
+    "handover": "node src/handover.js",
+    "run": "node src/index.js"
   },
   "dependencies": {
     "fast-xml-parser": "^4.5.6",
     "parse5": "^8.0.1"
   },
   "devDependencies": {
-    "@types/node": "^20",
     "fast-check": "^3",
-    "tsx": "^4",
-    "typescript": "^5.4",
     "vitest": "^1"
   }
 }

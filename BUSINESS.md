@@ -76,7 +76,7 @@ days.
 
 ---
 
-## 5. Intake — ask, then scan
+## 5. Intake — ask
 
 **Ask them first:** *"Which blocks are the same across all your emails?"*
 
@@ -84,7 +84,7 @@ Costs nothing, and it tells you what they **care** about — which is not the sa
 as what actually repeats. If they say "honestly, just the footer", that is a
 smaller, cheaper job and you should quote it that way.
 
-**Then scan the files, because they will be wrong in both directions:**
+**Do not take the answer at face value. They will be wrong in both directions:**
 
 - **Wrong about sameness.** "The footer is identical in all 40." It's in 37 —
   three still say the old address because someone missed them last time.
@@ -124,7 +124,7 @@ needs a meeting and a decision-maker from someone who's never seen your work.
 Quote five: $2,000 is a yes on the spot, and afterwards you know their real
 per-template rate.
 
-**Never quote a second batch you haven't scanned.** Their other 35 files contain
+**Never quote a second batch you haven't counted.** Their other 35 files contain
 blocks the first 5 never had. Count them first, then quote:
 
 > "$100 per template, plus $120 per new component beyond what we already built.
@@ -197,12 +197,14 @@ to raw HTML. What is left is what this business actually uses.
 
 | part | lines | for this business |
 |---|---|---|
-| `src/shared/components` — expander, store, tag scanner, types | 1,380 | **core.** this is the product |
-| `src/cli/handover.ts` — publish, expand, prove, export | 192 | **core.** the whole delivery |
-| `src/cli/term.ts` — terminal colours | 19 | plumbing |
+| `src/{expander,store,tagScan,types}.js` — the component engine | 1,050 | **core.** this is the product |
+| `src/index.js` — batch address/button find-and-replace | 312 | targeted edits across a folder |
+| `src/handover.js` — publish, expand, prove, export | 175 | **core.** the whole delivery |
+| `src/term.js` — terminal colours | 13 | plumbing |
 
-`src/` is 1,591 lines. There is no server, no API, no `web/`. `proof/` used to
-need `POST /api/render`; it doesn't any more, because there is nothing to render.
+`src/` is 1,550 lines of plain JavaScript. There is no server, no API, no
+`web/`. `proof/` used to need `POST /api/render`; it doesn't any more, because
+there is nothing to render.
 
 ### The proof got stronger. One guard got weaker.
 
@@ -234,7 +236,7 @@ Three screens.
 - byte-identical before/after against `originals/`. A template with no matching
   original is reported unresolved rather than counted as proven — it does not
   refuse the run
-- 97 tests across 3 files, all passing; `tsc --noEmit` clean
+- 97 tests across 3 files, all passing
 
 ### Not built
 
@@ -242,16 +244,13 @@ Three screens.
   files — no more hardcoded string constants — but into a fresh in-memory store
   each run, so every component is always revision 1 and templates can only pin
   `revision="1"`
-- a `scan` command to find repeated blocks across a template folder — *in
-  progress*
 - the dry-run diff and the pin bump as commands. Both exist as library
   capability (`expand(src, store, { pins })`, tested) with no CLI on top
 - persistence — the store is in-memory JSON, on purpose, until a real agency has
   used the model and shaped the schema
 - auth, billing, hosting, multi-brand
 
-**Build before migration #2, not before #1:** `scan`, then `publish` and the pin
-commands. Nothing else. They are the only things that make the next job faster,
+**Build before migration #2, not before #1:** `publish` and the pin commands. Nothing else. They are the only things that make the next job faster,
 and faster next jobs are the entire return on this repo.
 
 ---

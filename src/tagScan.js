@@ -1,5 +1,4 @@
 import { ExpansionError } from "./types.js";
-
 /**
  * Quote-aware tag scanning. Deliberately not a regex: `/<x-component[^>]*\/>/`
  * stops at a `>` inside an attribute value —
@@ -9,30 +8,19 @@ import { ExpansionError } from "./types.js";
  * — and produces a truncated match. The expander's exit guard would catch the
  * fallout, but a correct scanner should not be leaning on it.
  */
-
 /** Raised when a source carries an unterminated `<!--` that could hide a reference. */
 export class UnterminatedCommentError extends ExpansionError {
-  constructor(readonly at: number) {
+  at;
+  constructor(at) {
     super(
       `Unterminated <!-- comment at offset ${at}. Refusing to scan: the rest ` +
         `everything after it as comment content, so a reference inside would be ` +
-        `silently absent from the output.`
+        `silently absent from the output.`,
     );
+    this.at = at;
     this.name = "UnterminatedCommentError";
   }
 }
-
-export interface Range {
-  start: number;
-  end: number;
-}
-
-export interface CommentScan {
-  ranges: Range[];
-  /** Offset of an unterminated `<!--`, if the source carries one. */
-  unterminatedAt?: number;
-}
-
 /**
  * Inside these, `<!--` is ordinary text and opens no comment. `textarea` is
  * deliberately absent: htmlparser2 treats it as raw text only in HTML mode, and
@@ -40,7 +28,6 @@ export interface CommentScan {
  * parser comments out.
  */
 const RAW_TEXT_ELEMENTS = ["script", "style", "title"];
-
 /**
  * Byte ranges covered by XML comments. This must agree with htmlparser2, the
  * parser a client actually uses: a disagreement is a leak in one direction or a
@@ -50,15 +37,13 @@ const RAW_TEXT_ELEMENTS = ["script", "style", "title"];
  * matters when a reference could be hidden by it — a template with a stray
  * `<!--` and no components renders fine in a client.
  */
-export function scanComments(src: string): CommentScan {
-  const ranges: Range[] = [];
-  let unterminatedAt: number | undefined;
+export function scanComments(src) {
+  const ranges = [];
+  let unterminatedAt;
   let i = 0;
-
   while (i < src.length) {
     const lt = src.indexOf("<", i);
     if (lt === -1) break;
-
     // CDATA is not markup. Without this the tag-skip below
     // stops at the first `>` inside it and leaks a phantom comment opener.
     if (src.startsWith("<![CDATA[", lt)) {
@@ -66,7 +51,6 @@ export function scanComments(src: string): CommentScan {
       i = close === -1 ? src.length : close + 3;
       continue;
     }
-
     if (src.startsWith("<!--", lt)) {
       // From lt + 2, so the opener's own `--` can close a short comment, which
       // is what htmlparser2 does for `<!-->` and `<!--->`. Searching from lt + 4
@@ -81,13 +65,12 @@ export function scanComments(src: string): CommentScan {
       i = close + 3;
       continue;
     }
-
     // Quote-aware, so a `<!--` inside an attribute value is not a comment opener.
     let j = lt + 1;
     let inSingle = false;
     let inDouble = false;
     while (j < src.length) {
-      const ch = src[j]!;
+      const ch = src[j];
       if (inSingle) {
         if (ch === "'") inSingle = false;
       } else if (inDouble) {
@@ -97,7 +80,6 @@ export function scanComments(src: string): CommentScan {
       else if (ch === ">") break;
       j++;
     }
-
     const nameMatch = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(lt, j + 1));
     const name = nameMatch?.[1]?.toLowerCase();
     const selfClosed = src[j - 1] === "/";
@@ -106,72 +88,47 @@ export function scanComments(src: string): CommentScan {
       i = closeTag === -1 ? src.length : closeTag;
       continue;
     }
-
     i = j + 1;
   }
-
   return { ranges, unterminatedAt };
 }
-
 /** Ranges only. Retained for call sites that do not care about termination. */
-export function commentRanges(src: string): Range[] {
+export function commentRanges(src) {
   return scanComments(src).ranges;
 }
-
-export function isInRanges(ranges: Range[], offset: number): boolean {
+export function isInRanges(ranges, offset) {
   return ranges.some((r) => offset >= r.start && offset < r.end);
 }
-
-export interface ScannedAttr {
-  name: string;
-  /** Exactly as it appeared in source; entities are not decoded. */
-  value: string;
-}
-
 /**
  * Extends `ExpansionError` deliberately: every caller of `expand()` catches
  * that type, so an error outside the hierarchy escapes all of them.
  */
 export class MalformedTagError extends ExpansionError {
-  constructor(
-    readonly tagName: string,
-    readonly at: number
-  ) {
+  tagName;
+  at;
+  constructor(tagName, at) {
     super(`Malformed <${tagName}> at offset ${at}: tag is not terminated`);
+    this.tagName = tagName;
+    this.at = at;
     this.name = "MalformedTagError";
   }
 }
-
-export interface ScannedTag {
-  name: string;
-  /** Offset of `<`. */
-  start: number;
-  /** One past the closing `>`. */
-  end: number;
-  selfClosing: boolean;
-  /** In source order. */
-  attrs: ScannedAttr[];
-}
-
 /**
  * Takes the slice between the end of a tag name and its terminating `>`.
  * Unquoted values are accepted because hand-authored email HTML carries them, and
  * dropping an attribute silently would be worse than reading it.
  */
-function parseAttrs(src: string): ScannedAttr[] {
-  const out: ScannedAttr[] = [];
+function parseAttrs(src) {
+  const out = [];
   let i = 0;
   while (i < src.length) {
-    while (i < src.length && /\s/.test(src[i]!)) i++;
+    while (i < src.length && /\s/.test(src[i])) i++;
     if (i >= src.length) break;
-
     const nameStart = i;
-    while (i < src.length && !/[\s=]/.test(src[i]!)) i++;
+    while (i < src.length && !/[\s=]/.test(src[i])) i++;
     const name = src.slice(nameStart, i);
     if (!name) break;
-
-    while (i < src.length && /\s/.test(src[i]!)) i++;
-
+    while (i < src.length && /\s/.test(src[i])) i++;
     // A valueless attribute (`disabled`) is kept with an empty value rather than
     // dropped. It does not round-trip — `renderOpenTag` emits `disabled=""` —
     // but none apply here, so nothing depends on the distinction.
@@ -180,8 +137,7 @@ function parseAttrs(src: string): ScannedAttr[] {
       continue;
     }
     i++;
-    while (i < src.length && /\s/.test(src[i]!)) i++;
-
+    while (i < src.length && /\s/.test(src[i])) i++;
     const quote = src[i];
     if (quote === '"' || quote === "'") {
       i++;
@@ -191,50 +147,39 @@ function parseAttrs(src: string): ScannedAttr[] {
       i++;
     } else {
       const valStart = i;
-      while (i < src.length && !/\s/.test(src[i]!)) i++;
+      while (i < src.length && !/\s/.test(src[i])) i++;
       out.push({ name, value: src.slice(valStart, i) });
     }
   }
   return out;
 }
-
 /** Locates the OPEN tag only, which for a self-closing tag is the element. */
-export function findTag(
-  src: string,
-  tagName: string,
-  from = 0,
-  comments?: Range[]
-): ScannedTag | null {
+export function findTag(src, tagName, from = 0, comments) {
   let searchFrom = from;
   // Supplied by `findAllTags`, so repeated scanning stays linear.
   const commentSpans = comments ?? commentRanges(src);
-
   for (;;) {
     const idx = src.indexOf(`<${tagName}`, searchFrom);
     if (idx === -1) return null;
-
     // A commented-out reference must not be expanded into the comment.
     if (isInRanges(commentSpans, idx)) {
       searchFrom = idx + 1;
       continue;
     }
-
     // `<x-component-group` must not match `<x-component`.
     const after = src[idx + tagName.length + 1];
     if (after !== undefined && /[\w-]/.test(after)) {
       searchFrom = idx + 1;
       continue;
     }
-
     let i = idx + tagName.length + 1;
     let inSingle = false;
     let inDouble = false;
     let end = -1;
     let selfClosing = false;
     let attrsEnd = -1;
-
     while (i < src.length) {
-      const c = src[i]!;
+      const c = src[i];
       if (inSingle) {
         if (c === "'") inSingle = false;
       } else if (inDouble) {
@@ -255,11 +200,9 @@ export function findTag(
       }
       i++;
     }
-
     // Present-but-unscannable is not the same as absent: collapsing both to
     // null would make a malformed reference invisible to the expander's guard.
     if (end === -1) throw new MalformedTagError(tagName, idx);
-
     return {
       name: tagName,
       start: idx,
@@ -269,10 +212,9 @@ export function findTag(
     };
   }
 }
-
 /** Find every occurrence of a tag, left to right, non-overlapping. */
-export function findAllTags(src: string, tagName: string): ScannedTag[] {
-  const out: ScannedTag[] = [];
+export function findAllTags(src, tagName) {
+  const out = [];
   const comments = commentRanges(src);
   let from = 0;
   for (;;) {
@@ -282,9 +224,8 @@ export function findAllTags(src: string, tagName: string): ScannedTag[] {
     from = t.end;
   }
 }
-
 /** A component body's single root, so overrides can be applied to it. */
-export function readRootTag(src: string): ScannedTag | null {
+export function readRootTag(src) {
   const idx = src.indexOf("<");
   if (idx === -1) return null;
   // A body may be commented above its root. Doctypes and processing
@@ -302,9 +243,8 @@ export function readRootTag(src: string): ScannedTag | null {
   }
   const m = /^<\s*([A-Za-z][\w-]*)/.exec(src.slice(cursor));
   if (!m) return null;
-  return findTag(src, m[1]!, cursor);
+  return findTag(src, m[1], cursor);
 }
-
 /**
  * Attribute order is preserved; `"` must be escaped because `parseAttrs`
  * accepts single-quoted source while this always emits double quotes. A value
@@ -318,50 +258,37 @@ export function readRootTag(src: string): ScannedTag | null {
  * A value parsed from double-quoted source cannot contain a bare `"`, so this
  * is a no-op on the round-trip path.
  */
-export function renderOpenTag(
-  name: string,
-  attrs: ScannedAttr[],
-  selfClosing: boolean
-): string {
-  const parts = attrs.map(
-    (a) => `${a.name}="${a.value.replace(/"/g, "&quot;")}"`
-  );
+export function renderOpenTag(name, attrs, selfClosing) {
+  const parts = attrs.map((a) => `${a.name}="${a.value.replace(/"/g, "&quot;")}"`);
   const body = parts.length ? " " + parts.join(" ") : "";
   return `<${name}${body}${selfClosing ? " />" : ">"}`;
 }
-
 /**
  * One past the matching close tag, or null when the element is never closed —
  * which callers must be able to tell apart from "closes at end of input", or
  * `assertSingleRoot` passes vacuously for an unclosed root.
  */
-export function findElementEnd(src: string, open: ScannedTag): number | null {
+export function findElementEnd(src, open) {
   if (open.selfClosing) return open.end;
-
   let depth = 1;
   let cursor = open.end;
-
   for (;;) {
     const nextOpen = findTag(src, open.name, cursor);
     const closeRe = new RegExp(`<\\s*\\/\\s*${open.name}\\s*>`, "g");
     closeRe.lastIndex = cursor;
     const nextClose = closeRe.exec(src);
-
     if (!nextClose) return null; // never closed
-
     if (nextOpen && nextOpen.start < nextClose.index) {
       // A self-closing same-name tag opens and closes at once.
       if (!nextOpen.selfClosing) depth++;
       cursor = nextOpen.end;
       continue;
     }
-
     depth--;
     cursor = nextClose.index + nextClose[0].length;
     if (depth === 0) return cursor;
   }
 }
-
 /**
  * The element at an index path of ELEMENT children: `[0, 2]` is the third
  * element child of the first. Comments and text are not counted, so adding a
@@ -371,22 +298,15 @@ export function findElementEnd(src: string, open: ScannedTag): number | null {
  * Null when the path does not resolve, so the caller can name the component
  * rather than silently skipping an override the author asked for.
  */
-export function findElementAtPath(
-  src: string,
-  path: number[],
-  comments?: Range[]
-): ScannedTag | null {
+export function findElementAtPath(src, path, comments) {
   const spans = comments ?? commentRanges(src);
-
   let scopeStart = 0;
   let scopeEnd = src.length;
-  let current: ScannedTag | null = null;
-
+  let current = null;
   for (const wanted of path) {
     let idx = -1;
     let cursor = scopeStart;
-    let found: ScannedTag | null = null;
-
+    let found = null;
     while (cursor < scopeEnd) {
       const lt = src.indexOf("<", cursor);
       if (lt === -1 || lt >= scopeEnd) break;
@@ -399,9 +319,9 @@ export function findElementAtPath(
         cursor = lt + 1;
         continue;
       }
-      let tag: ScannedTag | null;
+      let tag;
       try {
-        tag = findTag(src, m[1]!, lt, spans);
+        tag = findTag(src, m[1], lt, spans);
       } catch {
         return null; // malformed; the survivor guard reports the real problem
       }
@@ -417,13 +337,11 @@ export function findElementAtPath(
       const end = findElementEnd(src, tag);
       cursor = end === null ? tag.end : end;
     }
-
     if (!found) return null;
     current = found;
     scopeStart = found.end;
     const e = findElementEnd(src, found);
     scopeEnd = e === null ? src.length : e;
   }
-
   return current;
 }
