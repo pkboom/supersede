@@ -8,13 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "vitest run",
-    "handover": "node src/handover.js",
-    "run": "node src/index.js",
-    "dev:extract-pattern": "node dev/extractPatternCommand.js",
-    "dev:extract-prompt": "node dev/extractPromptCommand.js",
-    "dev:validate-extract": "node dev/validateExtractCommand.js",
-    "dev": "node dev/index.js"
+    "test": "vitest run"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.7.2",

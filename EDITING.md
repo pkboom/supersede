@@ -9,7 +9,7 @@ Put the API key in the ignored root `.env` file as `OPENAI_API_KEY=...`; the
 pipeline and dev commands load it automatically.
 
 ```sh
-npm run run -- ./original ./updated \
+node src/index.js ./original ./updated \
   --instruction 'Replace the company postal address "OLD" with "NEW".' \
   --artifacts ./edit-evidence
 ```
@@ -62,26 +62,70 @@ Browser validation does not prove Outlook-specific rendering. The evidence repor
 
 A pattern rule replays the seed's complete replacement value. When a rule covers a whole `style` attribute and a later file carries extra declarations the seed lacks, replaying the seed value drops them. That is a real regression, and the Luna visual verdict does not reliably catch it; the OpenCV containment check does, and the file goes to review rather than to the output directory.
 
+## Turn a request into an item
+
+Extraction needs the item itself — `TRACK YOUR ORDER`, not "make the button
+blue". `requestedItemCommand` does that step: it asks what you want, sends the
+request with the email to Luna, and answers with the item to extract.
+
+```sh
+node dev/requestedItemCommand.js --value1 'make the button blue' --value2 asset/sample.html
+```
+
+```
+requestedItem: 'TRACK YOUR ORDER',
+foundVerbatim: true
+Reason: The request refers to the email's button.
+```
+
+To read the prompt for this phase without spending anything:
+
+```sh
+node dev/requestedItemPromptCommand.js --value1 'make the button blue' --value2 asset/sample.html
+```
+
+It answers with one sentence naming both halves — `Replace the address "…" with
+"…".` — and splits them out as `current` and `replacement`. It never invents a
+new value the request did not supply. `foundVerbatim` says whether `current` is a
+literal substring of the source: for an address split by `<br>`, `<strong>` and
+`&bull;` it is `false`, because the model returns the human-readable line rather
+than one fragment. The next phase matches on visible meaning, so that still
+resolves. A request naming something the email does not contain, or one that
+gives no new value, fails with the model's reason and exit `1` rather than
+guessing.
+
 ## Inspect one extraction
 
 ```sh
-npm run dev
+node dev/index.js
 # or run the command directly
-npm run dev:extract-pattern
+node dev/extractElementCommand.js
 ```
 
 Both flows prompt for anything not supplied. To skip the prompts, pass both
 values; omitting `--value2` still prompts for the file.
 
 ```sh
-node dev/extractPatternCommand.js --value1 'TRACK YOUR ORDER' --value2 asset/sample.html
-node dev/extractPatternCommand.js --value1 '123 Example Street Suite 500 Springfield, IL 62704'
+node dev/extractElementCommand.js --value1 'TRACK YOUR ORDER' --value2 asset/sample.html
+node dev/extractElementCommand.js --value1 '123 Example Street Suite 500 Springfield, IL 62704'
 ```
 
-There is no text-or-button choice. You name any identifiable item and it goes
-straight into the prompt: visible copy, a button or call-to-action label, a
-link, an attribute value such as `alt` or `title`, an image, or a colour. The
-model decides which element carries it.
+Feed it the refined sentence from the previous phase. It returns the element and
+the replacement: the same element rewritten with only the requested change
+applied.
+
+This takes two calls. The first picks the element from the minified view, which
+is all the selection needs. The second sends only that one element as **exact
+original source** and asks for it back with the change applied. The split is not
+an optimisation — a single call can only ever see the minified view, so it
+cannot reproduce the original's newlines and indentation, and its "replacement"
+silently reflows the whole element. Rewriting the original text instead keeps
+every untouched byte, and the element is small enough that the second call is
+cheap.
+
+You can still name a bare item rather than a full sentence: visible copy, a
+button or call-to-action label, a link, an attribute value such as `alt` or
+`title`, an image, or a colour. The model decides which element carries it.
 
 | you type | you get |
 |---|---|
@@ -97,7 +141,7 @@ it. When two elements are equally plausible the model returns `review` and the
 command fails rather than guessing.
 
 The `dev/index.js` → `dev/indexArguments.js` → `dev/*Command.js` dispatcher
-mirrors `../dmarc_lambda/dev`. Choose `extractPatternCommand`, enter visible
+mirrors `../dmarc_lambda/dev`. Choose `extractElementCommand`, enter visible
 text, and accept the default fixture at `asset/sample.html` or provide another
 email file. It
 uses the same UTF-8 decoder and element-ID annotation as the pipeline, asks Luna
@@ -106,11 +150,11 @@ writes that exact original source span to `asset/extracted-pattern.html`.
 
 ## See the prompt without spending anything
 
-`extractPromptCommand` takes the same text and shows the prompt that would be
-sent, then stops. It makes no API call.
+`extractElementPromptCommand` takes the same text and shows both prompts that
+would be sent, then stops. It makes no API call.
 
 ```sh
-npm run dev:extract-prompt -- --value1 'TRACK YOUR ORDER' --value2 asset/sample.html
+node dev/extractElementPromptCommand.js --value1 'TRACK YOUR ORDER' --value2 asset/sample.html
 ```
 
 It prints the model, the response schema, the element count, the prompt size in
@@ -126,8 +170,8 @@ text, and buttons, each across one, two, and three files with the target present
 or absent. `dev/validateExtractCommand.js` builds those corpora and runs them.
 
 ```sh
-npm run dev:validate-extract -- --value1 all --value2 offline
-npm run dev:validate-extract -- --value1 exact-text --value2 live
+node dev/validateExtractCommand.js --value1 all --value2 offline
+node dev/validateExtractCommand.js --value1 exact-text --value2 live
 ```
 
 `offline` substitutes a deterministic selector for the model, so it costs

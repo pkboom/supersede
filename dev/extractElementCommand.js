@@ -16,7 +16,7 @@ const rootDirectory = path.resolve(devDirectory, "..");
 export const defaultEmailFile = path.join(rootDirectory, "asset", "sample.html");
 export const defaultOutputFile = path.join(rootDirectory, "asset", "extracted-pattern.html");
 
-export async function extractPattern({ text, file = defaultEmailFile, model, runLuna }) {
+export async function extractElement({ text, file = defaultEmailFile, model, runLuna }) {
   const source = decodeHtml(fs.readFileSync(path.resolve(file)), file);
   const view = buildAnnotatedView(source);
   const part = await extractRelatedPartWithLuna(source, { text, model, runLuna });
@@ -41,7 +41,7 @@ async function promptForMissing(values) {
 
 export async function main(values = {}) {
   const selected = await promptForMissing(values);
-  const result = await extractPattern(selected);
+  const result = await extractElement(selected);
   fs.writeFileSync(defaultOutputFile, result.part.html, "utf8");
   console.log({
     requestedItem: selected.text,
@@ -51,8 +51,24 @@ export async function main(values = {}) {
     extractedTag: result.part.tagName,
     output: defaultOutputFile,
   });
-  console.log("\nExtracted HTML:\n");
+  console.log("\nElement:\n");
   console.log(result.part.html);
+  console.log("\nReplacement:\n");
+  console.log(result.part.replacement);
+  console.log("\nChanged:\n");
+  for (const line of changedLines(result.part.html, result.part.replacement)) console.log(line);
+}
+
+function changedLines(before, after) {
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const lines = [];
+  for (let index = 0; index < Math.max(beforeLines.length, afterLines.length); index += 1) {
+    if (beforeLines[index] === afterLines[index]) continue;
+    if (beforeLines[index] !== undefined) lines.push(`  - ${beforeLines[index].trim()}`);
+    if (afterLines[index] !== undefined) lines.push(`  + ${afterLines[index].trim()}`);
+  }
+  return lines.length ? lines : ["  (no line-level difference)"];
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

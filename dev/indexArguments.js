@@ -4,11 +4,13 @@ import fuzzy from "fuzzy";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultEmailFile } from "./extractPatternCommand.js";
+import { defaultEmailFile } from "./extractElementCommand.js";
 
 const descriptions = {
-  extractPatternCommand: "Extract the HTML part containing text or a button",
-  extractPromptCommand: "Show the extraction prompt without calling Luna",
+  extractElementCommand: "Extract the element and its replacement",
+  requestedItemCommand: "Turn a free-form request into the item to extract",
+  requestedItemPromptCommand: "Show the requested-item prompt without calling Luna",
+  extractElementPromptCommand: "Show the extract-element prompt without calling Luna",
   validateExtractCommand: "Run the validation.md extract scenarios",
 };
 
@@ -31,10 +33,21 @@ answers.command = await autocomplete({
       .sort();
     return search(commands, query);
   },
-  default: "extractPatternCommand",
+  default: "extractElementCommand",
 });
 
-if (["extractPatternCommand", "extractPromptCommand"].includes(answers.command)) {
+if (["requestedItemCommand", "requestedItemPromptCommand"].includes(answers.command)) {
+  answers.value1 = await input({
+    message: "What do you want to update?",
+    required: true,
+  });
+  answers.value2 = await input({
+    message: "Email file?",
+    default: defaultEmailFile,
+  });
+}
+
+if (["extractElementCommand", "extractElementPromptCommand"].includes(answers.command)) {
   answers.value1 = await input({
     message: "Requested item?",
     required: true,

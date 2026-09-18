@@ -193,69 +193,74 @@ that money costs you the answer you were buying.
 ### The repo is now one product
 
 It was built as an **AI email designer** (canvas, drag-and-drop, Claude pane) on
-top of an MJML parser. Both are gone: `web/` was deleted in `0856b63`, and
+top of an MJML parser. Those went first: `web/` was deleted in `0856b63`, and
 `src/shared/blocks` — 1,964 lines of MJML parse/serialise — went with the switch
-to raw HTML. What is left is what this business actually uses.
+to raw HTML. The `<x-component/>` engine and its `handover` delivery step have
+now gone too. They solved this problem by restructuring the customer's emails
+into components they would have to adopt. What replaced them solves it without
+touching how their emails are written.
 
 | part | lines | for this business |
 |---|---|---|
-| `src/{expander,store,tagScan,types}.js` — the component engine | 1,050 | **core.** this is the product |
-| `src/{index,patternWorkflow,patternAgent,patternLoop,htmlTargets,imagePresence,visualValidation}.js` | — | iterative shared-pattern editing and validation |
-| `src/handover.js` — publish, expand, prove, export | 175 | **core.** the whole delivery |
-| `src/term.js` — terminal colours | 13 | plumbing |
+| `src/{patternAgent,patternWorkflow,patternLoop}.js` — discover a shared pattern, apply it, loop | 687 | **core.** this is the product |
+| `src/htmlTargets.js` — exact source spans, safe replacement, model-facing views | 263 | **core.** every edit is anchored here |
+| `src/{visualValidation,imagePresence}.js` — Playwright captures, OpenCV containment | 338 | **core.** this is what makes a change provable |
+| `src/{itemResolver,partExtractor}.js` — request to item, item to element | 108 | the front of the flow |
+| `src/{index,luna}.js` — the CLI and the Responses API client | 204 | plumbing |
+| `dev/*.js` — one command per phase, runnable alone | 551 | how you inspect and debug a phase |
 
-`src/` is plain JavaScript. There is no product server, API, or `web/`.
-Playwright rendering exists only as a local validation step for batch edits.
+`src/` is plain JavaScript. There is no product server, API, or `web/`. Playwright
+rendering exists only as a local validation step for batch edits.
 
-### The proof got stronger. One guard got weaker.
+### The proof is now the product
 
-Before/after used to mean two MJML files pushed through `mjml2html` and the
-output compared. Both sides are plain HTML now, so `handover` sha256s the
-delivered bytes directly. That is strictly stronger — it cannot be satisfied by
-two different inputs that happen to compile the same way.
+The old pipeline proved delivery: `handover` sha256'd the expanded bytes against
+`originals/` to show nothing had changed. That only ever proved the *machinery*
+was faithful, because the customer's own edit was made by hand upstream.
 
-**The other half of that trade is a real loss.** The MJML compiler was also a
-second, independent refusal of an unexpanded reference. Raw HTML has no
-compiler, and a surviving `<x-component/>` renders as *nothing* — the email
-ships without its footer and nobody is told. That is now caught by a single
-`assertNoSurvivors` over the final bytes in `handover.ts`. One guard where there
-were two.
+This one proves the **edit**. Every change is anchored to an exact parsed span
+and replayed against the original source, then rendered before and after and
+checked two ways — a Luna verdict on the captures, and OpenCV containment of the
+changed region against the first file that passed. Neither signal can publish
+alone, and one file left in review suppresses the entire batch.
 
-### "They want a screen" is not "finish the canvas"
-
-There is no canvas left to reach for, which makes this easier. The screen answer
-C asks for is small: list the components, edit one, read the diff, press Apply.
-Three screens.
+That is a stronger claim than the one it replaces, and it has already been
+earned: on the real Delta button run, Luna passed a file that OpenCV caught, and
+nothing shipped. The edit would have dropped two style declarations.
 
 ### Works today
 
-- `npm run handover -- <job-dir>` — publishes every `components/**/*.html`,
-  expands every `templates/**/*.html`, writes `proof/` + `REPORT.md` +
-  `plain-export/`, exits 1 on any failure. `--check` writes nothing.
-- expander + throw-on-survivor guard
-- `ov-*` per-instance overrides, `data-slot` filling, nesting under a depth cap
-- byte-identical before/after against `originals/`. A template with no matching
-  original is reported unresolved rather than counted as proven — it does not
-  refuse the run
-- iterative Luna pattern discovery from the first matching pair, exact source
-  span application, OpenCV containment checks, and per-email visual validation
-- automated unit and integration coverage for the component engine, handover,
-  pattern loop, exact source edits, OpenCV matching, and visual-validation gates
+- `node src/index.js` — asks what you want, then the folders, then runs the loop
+  over a directory of emails and writes evidence. Fully specified on the command
+  line, it never prompts and stays scriptable
+- resolve a free-form request to the item it refers to, and fail closed when the
+  email contains no such thing
+- extract the smallest element carrying any item: visible text, a button label, an
+  `alt` value, a link, a colour
+- iterative pattern discovery from the first matching pair, exact source-span
+  application across every file it uniquely matches, and return of failures to
+  the loop with the evidence attached
+- Playwright before/after captures, Luna visual verdicts, OpenCV tri-state
+  containment, and an all-or-nothing publish staged through a rename
+- `dev/validateExtractCommand.js` — the `validation.md` scenario matrix, offline
+  for free or live against the API
+- 62 automated tests over the loop, exact source edits, OpenCV matching, the
+  visual-validation gates, prompt construction, and the CLI
 
 ### Not built
 
-- a standalone `publish <id> <file.html>` command. `handover` does publish from
-  files — no more hardcoded string constants — but into a fresh in-memory store
-  each run, so every component is always revision 1 and templates can only pin
-  `revision="1"`
-- the dry-run diff and the pin bump as commands. Both exist as library
-  capability (`expand(src, store, { pins })`, tested) with no CLI on top
-- persistence — the store is in-memory JSON, on purpose, until a real agency has
-  used the model and shaped the schema
+- the middle of `FLOW.md`: creating a new element from the extracted pattern and
+  replacing the old one with it, as a phase you can run and inspect on its own.
+  The workflow applies edits in place today; it does not build a replacement
+  element first
+- a non-visual change such as an `href` edit cannot reach `pass`, because the
+  visual prompt returns `review` for anything a capture cannot show
+- persistence of any kind. Every run is self-contained, on purpose, until a real
+  agency has used the model
 - auth, billing, hosting, multi-brand
 
-**Build before migration #2, not before #1:** `publish` and the pin commands. Nothing else. They are the only things that make the next job faster,
-and faster next jobs are the entire return on this repo.
+**Build next:** the two `FLOW.md` steps above. They are what turns this from a
+tool that edits emails into one that builds the replacement and proves it.
 
 ---
 
