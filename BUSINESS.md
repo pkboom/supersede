@@ -48,11 +48,12 @@ in the library; the two commands on top of it are §9 "Not built".)
       → you zip it back and invoice
 
 This is why the missing login/billing/hosting is not a gap — the business never
-needs them. Cost to deliver: your Claude subscription.
+needs them. Cost to deliver: metered GPT-5.6 Luna API usage plus local labor.
 
-Their templates sit on your disk. The app runs `claude
---dangerously-skip-permissions` inside `./workspace/`, which **persists between
-runs** — wipe it between customers.
+Their templates sit on your disk. Pattern extraction and visual validation send
+bounded HTML/capture inputs to the OpenAI Responses API; exact edits, files,
+Playwright rendering, and OpenCV matching remain local. `./workspace/`
+**persists between runs** — wipe it between customers.
 
 **Ceiling:** one person, one laptop, one migration at a time.
 
@@ -137,7 +138,8 @@ libraries, not one.
 
 - Tools in this category sell for $10–$30/mo, with free MJML / React Email /
   Maizzle underneath. Too cheap to live on.
-- One heavy user's Claude bill can top $49/mo. You'd lose money as they used it.
+- Unbounded hosted AI usage can exceed a low monthly tool price. You would lose
+  money if usage were bundled without limits.
 - There is no login, billing or hosting in the repo. You couldn't charge monthly
   this month if you wanted to.
 
@@ -198,13 +200,12 @@ to raw HTML. What is left is what this business actually uses.
 | part | lines | for this business |
 |---|---|---|
 | `src/{expander,store,tagScan,types}.js` — the component engine | 1,050 | **core.** this is the product |
-| `src/index.js` — batch address/button find-and-replace | 312 | targeted edits across a folder |
+| `src/{index,patternWorkflow,patternAgent,patternLoop,htmlTargets,imagePresence,visualValidation}.js` | — | iterative shared-pattern editing and validation |
 | `src/handover.js` — publish, expand, prove, export | 175 | **core.** the whole delivery |
 | `src/term.js` — terminal colours | 13 | plumbing |
 
-`src/` is 1,550 lines of plain JavaScript. There is no server, no API, no
-`web/`. `proof/` used to need `POST /api/render`; it doesn't any more, because
-there is nothing to render.
+`src/` is plain JavaScript. There is no product server, API, or `web/`.
+Playwright rendering exists only as a local validation step for batch edits.
 
 ### The proof got stronger. One guard got weaker.
 
@@ -236,7 +237,10 @@ Three screens.
 - byte-identical before/after against `originals/`. A template with no matching
   original is reported unresolved rather than counted as proven — it does not
   refuse the run
-- 97 tests across 3 files, all passing
+- iterative Luna pattern discovery from the first matching pair, exact source
+  span application, OpenCV containment checks, and per-email visual validation
+- automated unit and integration coverage for the component engine, handover,
+  pattern loop, exact source edits, OpenCV matching, and visual-validation gates
 
 ### Not built
 
