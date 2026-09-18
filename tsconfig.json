@@ -12,6 +12,7 @@
     "resolveJsonModule": true
   },
   "include": [
+    "email-update.ts",
     "src/**/*",
     "tests/**/*",
     "declarations.d.ts"
