@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { input } from "@inquirer/prompts";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,13 +5,7 @@ import { fileURLToPath } from "node:url";
 import yargs from "yargs/yargs";
 import { buildElementAnnotatedView, decodeHtml } from "../src/htmlTargets.js";
 import { DEFAULT_MODEL } from "../src/luna.js";
-import {
-  PART_SCHEMA,
-  PART_SCHEMA_NAME,
-  REPLACEMENT_SCHEMA,
-  buildRelatedPartPrompt,
-  buildReplacementPrompt,
-} from "../src/partExtractor.js";
+import { PART_SCHEMA, PART_SCHEMA_NAME, buildRelatedPartPrompt } from "../src/partExtractor.js";
 
 const devDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.resolve(devDirectory, "..");
@@ -58,12 +50,10 @@ export async function main(values = {}) {
     promptBytes,
     estimatedTokens: Math.round(promptBytes / 4),
   });
-  console.log("\nResponse schemas:\n");
-  console.log(JSON.stringify({ select: PART_SCHEMA, rewrite: REPLACEMENT_SCHEMA }, null, 2));
-  console.log("\nPrompt 1 of 2 — select the element:\n");
+  console.log("\nResponse schema:\n");
+  console.log(JSON.stringify(PART_SCHEMA, null, 2));
+  console.log("\nPrompt:\n");
   console.log(result.prompt);
-  console.log("\nPrompt 2 of 2 — rewrite it:\n");
-  console.log(buildReplacementPrompt(selected.text, "<the selected element, exact original source>"));
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

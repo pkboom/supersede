@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { input } from "@inquirer/prompts";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,22 +51,6 @@ export async function main(values = {}) {
   });
   console.log("\nElement:\n");
   console.log(result.part.html);
-  console.log("\nReplacement:\n");
-  console.log(result.part.replacement);
-  console.log("\nChanged:\n");
-  for (const line of changedLines(result.part.html, result.part.replacement)) console.log(line);
-}
-
-function changedLines(before, after) {
-  const beforeLines = before.split("\n");
-  const afterLines = after.split("\n");
-  const lines = [];
-  for (let index = 0; index < Math.max(beforeLines.length, afterLines.length); index += 1) {
-    if (beforeLines[index] === afterLines[index]) continue;
-    if (beforeLines[index] !== undefined) lines.push(`  - ${beforeLines[index].trim()}`);
-    if (afterLines[index] !== undefined) lines.push(`  + ${afterLines[index].trim()}`);
-  }
-  return lines.length ? lines : ["  (no line-level difference)"];
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

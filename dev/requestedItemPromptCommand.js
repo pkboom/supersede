@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { input } from "@inquirer/prompts";
 import fs from "node:fs";
 import path from "node:path";

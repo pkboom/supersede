@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { defaultEmailFile } from "./extractElementCommand.js";
 
 const descriptions = {
-  extractElementCommand: "Extract the element and its replacement",
+  extractElementCommand: "Extract the element carrying the change",
+  narrowChangeCommand: "Narrow the element to a deterministic change span",
   requestedItemCommand: "Turn a free-form request into the item to extract",
   requestedItemPromptCommand: "Show the requested-item prompt without calling Luna",
   extractElementPromptCommand: "Show the extract-element prompt without calling Luna",
@@ -35,6 +36,17 @@ answers.command = await autocomplete({
   },
   default: "extractElementCommand",
 });
+
+if (answers.command === "narrowChangeCommand") {
+  answers.value1 = await input({
+    message: "What do you want to update?",
+    required: true,
+  });
+  answers.value2 = await input({
+    message: "Workspace folder?",
+    default: path.join(path.dirname(devDir), "workspace", "delta"),
+  });
+}
 
 if (["requestedItemCommand", "requestedItemPromptCommand"].includes(answers.command)) {
   answers.value1 = await input({
