@@ -7,12 +7,10 @@ import { fileURLToPath } from "node:url";
 import { defaultEmailFile } from "./extractElementCommand.js";
 
 const descriptions = {
-  extractElementCommand: "Extract the element carrying the change",
-  narrowChangeCommand: "Narrow the element to a deterministic change span",
-  requestedItemCommand: "Turn a free-form request into the item to extract",
-  requestedItemPromptCommand: "Show the requested-item prompt without calling Luna",
-  extractElementPromptCommand: "Show the extract-element prompt without calling Luna",
-  validateExtractCommand: "Run the validation.md extract scenarios",
+  extractElementCommand: "Phase 1 alone: extract the element it names",
+  extractElementPromptCommand: "Phase 1 prompt only, without calling Luna",
+  narrowChangeCommand: "Both phases: extract, narrow, and check determinism",
+  validateExtractCommand: "Run the validateExtract.md scenarios",
 };
 
 async function search(options, query = "") {
@@ -39,7 +37,11 @@ answers.command = await autocomplete({
 
 if (answers.command === "narrowChangeCommand") {
   answers.value1 = await input({
-    message: "What do you want to update?",
+    message: "What should I find?",
+    required: true,
+  });
+  answers.value3 = await input({
+    message: "What should it be replaced with?",
     required: true,
   });
   answers.value2 = await input({
@@ -48,20 +50,9 @@ if (answers.command === "narrowChangeCommand") {
   });
 }
 
-if (["requestedItemCommand", "requestedItemPromptCommand"].includes(answers.command)) {
-  answers.value1 = await input({
-    message: "What do you want to update?",
-    required: true,
-  });
-  answers.value2 = await input({
-    message: "Email file?",
-    default: defaultEmailFile,
-  });
-}
-
 if (["extractElementCommand", "extractElementPromptCommand"].includes(answers.command)) {
   answers.value1 = await input({
-    message: "Requested item?",
+    message: "What should I find?",
     required: true,
   });
   answers.value2 = await input({

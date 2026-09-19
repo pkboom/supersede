@@ -40,7 +40,7 @@ describe("Luna related-part extraction", () => {
     const { prompt } = runLuna.mock.calls[0][0];
 
     expect(prompt).toContain("td.buttonblock");
-    expect(prompt).toContain("Requested change: TRACK YOUR ORDER");
+    expect(prompt).toContain("User request: TRACK YOUR ORDER");
   });
 
   it("rejects a hallucinated element ID", async () => {

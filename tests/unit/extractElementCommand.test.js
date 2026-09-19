@@ -13,7 +13,7 @@ function selector(predicate) {
 describe("extractElementCommand", () => {
   it("uses the copied sample email by default and extracts Luna-selected text context", async () => {
     const result = await extractElement({
-      text: "123 Example Street Suite 500 Springfield, IL 62704",
+      find: "123 Example Street Suite 500 Springfield, IL 62704",
       file: defaultEmailFile,
       runLuna: selector((element) => element.html.startsWith(`<td id="Footer"`)),
     });
@@ -24,7 +24,7 @@ describe("extractElementCommand", () => {
 
   it("extracts the complete Luna-selected shared button cell", async () => {
     const result = await extractElement({
-      text: "TRACK YOUR ORDER",
+      find: "TRACK YOUR ORDER",
       file: defaultEmailFile,
       runLuna: selector((element) => element.tagName === "td" && element.html.includes('class="innertd buttonblock"') && element.html.includes("TRACK YOUR ORDER")),
     });

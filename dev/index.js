@@ -4,15 +4,24 @@ import { args } from "./indexArguments.js";
 
 const command = path.join(args.devDir, `${args.command}.js`);
 const options = [
-  "--value1",
-  String(args.value1 ?? ""),
-  "--value2",
-  String(args.value2 ?? ""),
-  "--value3",
-  String(args.value3 ?? ""),
-  "--devDir",
-  args.devDir,
-];
+  ["--value1", args.value1],
+  ["--value2", args.value2],
+  ["--value3", args.value3],
+  ["--devDir", args.devDir],
+]
+  .filter(([, value]) => value !== undefined && value !== null && value !== "")
+  .flatMap(([flag, value]) => [flag, String(value)]);
 
-console.log([process.execPath, command, ...options].join(" "));
-execFileSync(process.execPath, [command, ...options], { stdio: "inherit" });
+const quoted = (value) => (/[\s"'$`\\]/u.test(value) ? JSON.stringify(value) : value);
+console.log([process.execPath, command, ...options].map(quoted).join(" "));
+
+try {
+  execFileSync(process.execPath, [command, ...options], { stdio: "inherit" });
+} catch (error) {
+  if (typeof error?.status === "number") {
+    process.exitCode = error.status;
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}

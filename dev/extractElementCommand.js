@@ -14,10 +14,10 @@ const rootDirectory = path.resolve(devDirectory, "..");
 export const defaultEmailFile = path.join(rootDirectory, "asset", "sample.html");
 export const defaultOutputFile = path.join(rootDirectory, "asset", "extracted-pattern.html");
 
-export async function extractElement({ text, file = defaultEmailFile, model, runLuna }) {
+export async function extractElement({ find, file = defaultEmailFile, model, runLuna }) {
   const source = decodeHtml(fs.readFileSync(path.resolve(file)), file);
   const view = buildAnnotatedView(source);
-  const part = await extractRelatedPartWithLuna(source, { text, model, runLuna });
+  const part = await extractRelatedPartWithLuna(source, { text: find, model, runLuna });
   return {
     file: path.resolve(file),
     editableTargets: view.targets.size,
@@ -26,15 +26,15 @@ export async function extractElement({ text, file = defaultEmailFile, model, run
 }
 
 async function promptForMissing(values) {
-  const text = values.text || await input({
-    message: "Requested item?",
+  const find = values.find || await input({
+    message: "What should I find?",
     required: true,
   });
   const file = values.file || await input({
     message: "Email file?",
     default: defaultEmailFile,
   });
-  return { text, file };
+  return { find, file };
 }
 
 export async function main(values = {}) {
@@ -42,7 +42,7 @@ export async function main(values = {}) {
   const result = await extractElement(selected);
   fs.writeFileSync(defaultOutputFile, result.part.html, "utf8");
   console.log({
-    requestedItem: selected.text,
+    find: selected.find,
     source: result.file,
     editableTargets: result.editableTargets,
     analyzedElements: result.part.analyzedElements,
@@ -55,8 +55,8 @@ export async function main(values = {}) {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  const argv = yargs(process.argv.slice(2)).parse();
-  main({ text: argv.value1, file: argv.value2 }).catch((error) => {
+  const argv = yargs(process.argv.slice(2)).string(["value1", "value2", "value3"]).parse();
+  main({ find: argv.value1, file: argv.value2 }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });

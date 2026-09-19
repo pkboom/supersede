@@ -12,7 +12,7 @@ const element = `<td id="Footer">\n  &copy; 2026 Example\n  123 Old Street &bull
 const span = "123 Old Street &bull; Springfield, IL 62704";
 
 function luna(response) {
-  return vi.fn(async () => response);
+  return vi.fn(async () => ({ interpretation: "value", ...response }));
 }
 
 describe("change narrowing", () => {
@@ -116,9 +116,62 @@ describe("change narrowing", () => {
     expect(change.from).toBe(span);
   });
 
+  it("refuses to write the words of a property change into the email", async () => {
+    const button = `<td class="innertd buttonblock" bgcolor="#E51937" style="background-color: #E51937;"><a style="background-color: #E51937;" href="https://x">START EARNING TOGETHER</a></td>`;
+
+    await expect(narrowChangeWithLuna(button, {
+      text: "Target: button: start earning together\nRequested change: update the background to sky blue",
+      replacement: "update the background to sky blue",
+      runLuna: luna({
+        status: "narrowed",
+        interpretation: "instruction",
+        from: "START EARNING TOGETHER",
+        to: "update the background to sky blue",
+        reason: "x",
+      }),
+    })).rejects.toThrow(/writes the words of the request into the email/i);
+  });
+
+  it("allows a property change that edits the markup carrying the property", async () => {
+    const button = `<td bgcolor="#E51937" style="background-color: #E51937;"><a href="https://x">GO</a></td>`;
+
+    const change = await narrowChangeWithLuna(button, {
+      text: "Target: the button\nRequested change: update the background to sky blue",
+      replacement: "update the background to sky blue",
+      runLuna: luna({
+        status: "narrowed",
+        interpretation: "instruction",
+        from: `bgcolor="#E51937" style="background-color: #E51937;"`,
+        to: `bgcolor="#87CEEB" style="background-color: #87CEEB;"`,
+        reason: "x",
+      }),
+    });
+
+    expect(change.to).toContain("#87CEEB");
+    expect(change.interpretation).toBe("instruction");
+  });
+
+  it("still allows a literal value that happens to read like a sentence", async () => {
+    const change = await narrowChangeWithLuna(element, {
+      text: "Target: the footer address\nRequested change: Update your details at example.com",
+      replacement: "Update your details at example.com",
+      runLuna: luna({
+        status: "narrowed",
+        interpretation: "value",
+        from: span,
+        to: "Update your details at example.com",
+        reason: "x",
+      }),
+    });
+
+    expect(change.to).toBe("Update your details at example.com");
+  });
+
   it("compares entities, tags, and case the same way", () => {
     expect(normalizeForComparison("A &bull; B")).toBe("a • b");
     expect(normalizeForComparison("<strong>Suite 500</strong>  x")).toBe("suite 500 x");
+    expect(normalizeForComparison("123 Example Street<br>Springfield, IL 62704"))
+      .toBe("123 example street springfield, il 62704");
     expect(normalizeForComparison("&#8226;")).toBe("•");
   });
 });

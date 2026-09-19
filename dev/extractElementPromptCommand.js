@@ -11,29 +11,29 @@ const devDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.resolve(devDirectory, "..");
 export const defaultEmailFile = path.join(rootDirectory, "asset", "sample.html");
 
-export function extractElementPrompt({ text, file = defaultEmailFile }) {
-  if (!text?.trim()) throw new Error("A requested item is required.");
+export function extractElementPrompt({ find, file = defaultEmailFile }) {
+  if (!find?.trim()) throw new Error("A find phase is required.");
   const resolved = path.resolve(file);
   const source = decodeHtml(fs.readFileSync(resolved), file);
   const view = buildElementAnnotatedView(source);
   return {
     file: resolved,
-    prompt: buildRelatedPartPrompt(text, view.html),
+    prompt: buildRelatedPartPrompt(find, view.html),
     analyzedElements: view.elements.size,
     sourceBytes: Buffer.byteLength(source),
   };
 }
 
 async function promptForMissing(values) {
-  const text = values.text || await input({
-    message: "Requested item?",
+  const find = values.find || await input({
+    message: "What should I find?",
     required: true,
   });
   const file = values.file || await input({
     message: "Email file?",
     default: defaultEmailFile,
   });
-  return { text, file };
+  return { find, file };
 }
 
 export async function main(values = {}) {
@@ -41,7 +41,7 @@ export async function main(values = {}) {
   const result = extractElementPrompt(selected);
   const promptBytes = Buffer.byteLength(result.prompt);
   console.log({
-    requestedItem: selected.text,
+    find: selected.find,
     source: result.file,
     model: DEFAULT_MODEL,
     schema: PART_SCHEMA_NAME,
@@ -58,8 +58,8 @@ export async function main(values = {}) {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  const argv = yargs(process.argv.slice(2)).parse();
-  main({ text: argv.value1, file: argv.value2 }).catch((error) => {
+  const argv = yargs(process.argv.slice(2)).string(["value1", "value2", "value3"]).parse();
+  main({ find: argv.value1, file: argv.value2 }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });

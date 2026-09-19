@@ -1,128 +1,190 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { input } from "@inquirer/prompts";
-import { DEFAULT_MODEL } from "./luna.js";
-import { runEmailPatternWorkflow } from "./patternWorkflow.js";
+import { confirm, input } from "@inquirer/prompts";
+import {
+  buildChangeRequest,
+  checkDeterminism,
+  narrowChangeWithLuna,
+  replacementLanded,
+} from "./changeNarrower.js";
+import { decodeHtml } from "./htmlTargets.js";
+import { extractRelatedPartWithLuna } from "./partExtractor.js";
+import { buildReplacementScript, changeSlug } from "./replacementScript.js";
+import {
+  CHANGES_DIRECTORY,
+  processedFiles,
+  readProgress,
+  recordChange,
+  writeChangeScript,
+} from "./progress.js";
 
-const USAGE = `
-Usage:
+const SKIPPED = new Set([CHANGES_DIRECTORY, ".git", ".omc", ".omx", "node_modules"]);
+const DEFAULT_WORKSPACE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "workspace",
+  "delta",
+);
 
-  node src/index.js [INPUT] [OUTPUT] [options]
-
-Run it with no arguments and it asks what you want to do, then where. Anything
-you supply up front is not asked for again, so a fully specified command never
-prompts and stays usable from a script.
-
-Options:
-
-  --instruction TEXT
-  --instruction-file FILE
-  --artifacts DIR             default: OUTPUT.evidence
-  --model MODEL               default: ${DEFAULT_MODEL}
-  --max-validation-attempts N default: 2
-
-The command loops over unprocessed emails. It keeps the first email as the seed,
-compares it with the second, then the third, until two files establish a shared
-pattern. It applies that pattern wherever it matches, validates every result,
-and repeats with failed or unmatched files.
-`;
-
-const VALUE_OPTIONS = new Set([
-  "--instruction",
-  "--instruction-file",
-  "--artifacts",
-  "--model",
-  "--max-validation-attempts",
-]);
-
-export function splitArguments(args) {
-  const positional = [];
-  const flags = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (!argument.startsWith("--")) {
-      positional.push(argument);
-      continue;
-    }
-    if (!VALUE_OPTIONS.has(argument)) throw new Error(`Unknown option: ${argument}${USAGE}`);
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("--")) throw new Error(`${argument} requires a value.${USAGE}`);
-    flags.push([argument, value]);
-    index += 1;
+export function readJob(workspace) {
+  const root = path.resolve(workspace);
+  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+    throw new Error(`Workspace is not a directory: ${root}`);
   }
-  if (positional.length > 2) throw new Error(`Unexpected argument: ${positional[2]}${USAGE}`);
-  return { positional, flags };
-}
-
-export function parseOptions(flags) {
-  let instruction;
-  let instructionFile;
-  let artifacts;
-  let model = DEFAULT_MODEL;
-  let maxValidationAttempts = 2;
-  for (const [option, value] of flags) {
-    if (option === "--instruction") instruction = value;
-    else if (option === "--instruction-file") instructionFile = value;
-    else if (option === "--artifacts") artifacts = value;
-    else if (option === "--model") model = value;
-    else {
-      maxValidationAttempts = Number(value);
-      if (!Number.isInteger(maxValidationAttempts) || maxValidationAttempts < 1 || maxValidationAttempts > 10) {
-        throw new Error("--max-validation-attempts must be an integer from 1 to 10.");
-      }
-    }
-  }
-  if (instruction && instructionFile) throw new Error("Use --instruction or --instruction-file, not both.");
-  if (instructionFile) instruction = fs.readFileSync(path.resolve(instructionFile), "utf8");
-  if (instruction !== undefined && !instruction.trim()) throw new Error(`An edit instruction is required.${USAGE}`);
-  return { instruction, artifacts, model, maxValidationAttempts };
-}
-
-const askForInput = {
-  instruction: () => input({ message: "What do you want?", required: true }),
-  input: () => input({ message: "Folder of emails to read?", required: true }),
-  output: () => input({ message: "Folder to write?", required: true }),
-};
-
-export async function resolvePlan(args, ask = askForInput) {
-  const { positional, flags } = splitArguments(args);
-  const options = parseOptions(flags);
-  const instruction = options.instruction ?? await ask.instruction();
-  if (!instruction?.trim()) throw new Error(`An edit instruction is required.${USAGE}`);
-  const inputDirectory = positional[0] ?? await ask.input();
-  const outputDirectory = positional[1] ?? await ask.output();
-  const output = path.resolve(outputDirectory);
+  const files = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !SKIPPED.has(entry.name))
+    .filter((entry) => [".html", ".htm"].includes(path.extname(entry.name).toLowerCase()))
+    .map((entry) => entry.name)
+    .sort();
+  if (!files.length) throw new Error(`Workspace has no HTML files: ${root}`);
   return {
-    instruction,
-    input: path.resolve(inputDirectory),
-    output,
-    artifacts: options.artifacts ? path.resolve(options.artifacts) : `${output}.evidence`,
-    model: options.model,
-    maxValidationAttempts: options.maxValidationAttempts,
+    root,
+    files: files.map((id) => ({ id, source: decodeHtml(fs.readFileSync(path.join(root, id)), id) })),
   };
 }
 
-export async function main(args = process.argv.slice(2), ask = askForInput) {
-  const plan = await resolvePlan(args, ask);
-  const report = await runEmailPatternWorkflow(plan.input, plan.output, plan.instruction, plan.artifacts, {
-    model: plan.model,
-    maxValidationAttempts: plan.maxValidationAttempts,
-  });
-  console.log({
-    status: report.status,
-    patterns: report.patterns.length,
-    processed: report.processed.length,
-    reviews: report.reviews.length,
-    artifacts: plan.artifacts,
-  });
-  if (report.status !== "pass") process.exitCode = 2;
+export function remainingFiles(job, progress) {
+  const done = new Set(processedFiles(progress));
+  return job.files.map((file) => file.id).filter((id) => !done.has(id));
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+export async function proposeChange(job, find, options = {}) {
+  if (!find?.trim()) throw new Error("A find phase is required.");
+  const seed = job.files[0];
+  const element = await extractRelatedPartWithLuna(seed.source, { ...options, text: find });
+  return { seed, find, element };
 }
+
+export async function narrowProposal(job, proposal, replacement, options = {}) {
+  const request = buildChangeRequest(proposal.find, replacement);
+  const change = await narrowChangeWithLuna(proposal.element.html, { ...options, text: request, replacement });
+  const determinism = checkDeterminism(job.files, change);
+  const covered = determinism.perFile
+    .filter((entry) => entry.status === "unique")
+    .map((entry) => entry.file);
+  return { request, replacement, change, determinism, covered };
+}
+
+export function runChangeScript(root, script, { run = execFileSync } = {}) {
+  try {
+    return { ok: true, output: run(process.execPath, [path.join(root, script)], { encoding: "utf8" }) };
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    return { ok: false, output: output || (error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+export function commitChange(job, progress, { proposal, narrowed }, options = {}) {
+  const name = changeSlug(proposal.find, progress.changes.length + 1);
+  const script = path.relative(job.root, writeChangeScript(job.root, name, buildReplacementScript({
+    request: narrowed.request,
+    from: narrowed.change.from,
+    to: narrowed.change.to,
+    files: narrowed.covered,
+  })));
+  const applied = runChangeScript(job.root, script, options);
+  const elementBytes = proposal.element.html.length;
+  const spanBytes = narrowed.change.from.length;
+  const next = recordChange(job.root, progress, {
+    at: new Date().toISOString(),
+    find: proposal.find,
+    replacement: narrowed.replacement,
+    request: narrowed.request,
+    seed: proposal.seed.id,
+    elementTag: proposal.element.tagName,
+    elementBytes,
+    spanBytes,
+    blastRadius: `${((spanBytes / elementBytes) * 100).toFixed(1)}% of the element`,
+    from: narrowed.change.from,
+    to: narrowed.change.to,
+    determinism: narrowed.determinism.status,
+    perFile: narrowed.determinism.perFile,
+    files: narrowed.covered,
+    script,
+    applied: applied.ok,
+  });
+  return { progress: next, applied };
+}
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+function report(job, progress) {
+  const done = processedFiles(progress);
+  const left = remainingFiles(job, progress);
+  console.log(`\n${plural(progress.changes.length, "change")} recorded, ${done.length} of ${plural(job.files.length, "file")} touched.`);
+  if (done.length) console.log(`Processed: ${done.join(", ")}`);
+  console.log(left.length ? `Still to check: ${left.join(", ")}` : "No files left to check.");
+}
+
+const askForInput = {
+  workspace: () => input({ message: "Workspace folder?", default: DEFAULT_WORKSPACE }),
+  find: () => input({ message: "What should I find?", required: true }),
+  replacement: () => input({ message: "What should it be replaced with?", required: true }),
+  looksRight: () => confirm({ message: "Does this element look right?", default: true }),
+  again: () => confirm({ message: "Another change?", default: true }),
+};
+
+export async function main(args = process.argv.slice(2), ask = askForInput, options = {}) {
+  let job = readJob(args[0] ?? await ask.workspace());
+  let progress = readProgress(job.root);
+  console.log(`\n${job.root}`);
+  report(job, progress);
+
+  for (;;) {
+    const find = await ask.find();
+    const replacement = await ask.replacement();
+
+    const proposal = await proposeChange(job, find, options);
+    console.log(`\nFind: ${find}`);
+    console.log(`Replace with: ${replacement}`);
+    console.log(`\nElement from ${proposal.seed.id} (${proposal.element.tagName}, ${proposal.element.html.length} bytes):\n`);
+    console.log(proposal.element.html);
+
+    if (!await ask.looksRight()) {
+      console.log("\nStopped. Nothing was written.");
+      return { stopped: true, progress };
+    }
+
+    const narrowed = await narrowProposal(job, proposal, replacement, options);
+    const spanBytes = narrowed.change.from.length;
+    console.log(`\nNarrowed to ${spanBytes} bytes (${((spanBytes / proposal.element.html.length) * 100).toFixed(1)}% of the element):\n`);
+    console.log(`  - ${narrowed.change.from}`);
+    console.log(`  + ${narrowed.change.to}`);
+    if (narrowed.change.interpretation === "value" && !replacementLanded(narrowed.change.to, replacement)) {
+      console.log(`\nNote: the narrowed result does not carry ${JSON.stringify(replacement)} literally. Read the two lines above before trusting it.`);
+    }
+    console.log("\nMatches per file:\n");
+    for (const entry of narrowed.determinism.perFile) {
+      console.log(`  ${entry.file}: ${entry.status} (${entry.occurrences})`);
+    }
+
+    if (narrowed.determinism.status !== "deterministic") {
+      console.log(`\nNot deterministic (${narrowed.determinism.status}). Nothing was written.`);
+      if (!await ask.again()) return { stopped: false, progress };
+      continue;
+    }
+
+    const committed = commitChange(job, progress, { proposal, narrowed }, options);
+    progress = committed.progress;
+    console.log(`\nScript: ${path.join(job.root, progress.changes.at(-1).script)}\n`);
+    console.log(committed.applied.output.trimEnd());
+    if (!committed.applied.ok) {
+      console.log("\nThe script refused at least one file. Those files are unchanged and still need checking.");
+    }
+
+    job = readJob(job.root);
+    report(job, progress);
+
+    if (!await ask.again()) return { stopped: false, progress };
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
