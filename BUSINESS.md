@@ -20,22 +20,25 @@ just never arrives as an invoice.
 
 ## 2. The fix
 
-Move each repeated block into one file, and leave a note in its place.
+Say what to change. It finds every place that thing lives, edits only the span
+that carries it, and shows you the before and the after.
 
-    before   <tr><td><p>Shoe Brand · 123 Old Street</p></td></tr>
-    after    <x-component component-id="shoe-brand/footer" revision="1" />
+    you say    find: company address → replace with: 456 New Street
+    it finds   the address in 37 of the 40 files, and names the 3 it did not match
+    it edits   56 bytes inside a 1,738-byte block — nothing else in the file moves
+    it proves  before/after renders, checked by a Luna verdict and by OpenCV
 
-Before sending, a program reads each note, fetches the block, and pastes it in.
-Out comes ordinary HTML — **byte-identical to what they had**. Nobody can tell
-anything changed.
+Two days becomes an afternoon, and the files come back as ordinary HTML.
+Nothing is restructured. There is nothing for them to adopt, and nothing of
+yours left behind for them to undo.
 
-What changed is the price of the *next* change: one edit instead of forty.
-
-**Versions are explicit.** Publishing footer v2 changes nothing — templates still
-pin `revision="1"`. Expanding against a pin produces the real after-HTML, so you
-can read exactly what would change before committing to it. Moving a template to
-v2 is one attribute. Nothing ever moves behind their back. (The pin machinery is
-in the library; the two commands on top of it are §9 "Not built".)
+**The edit is anchored, not searched-and-replaced.** Every change is tied to an
+exact parsed source span and replayed against the original file, and applied
+only where it matches a file *uniquely* — a file with two candidates goes back
+to the loop instead of being edited on a guess. A batch publishes
+all-or-nothing: one file left in review and nothing ships. That
+has already paid for itself — on the real Delta button run it stopped an edit
+that would have dropped two style declarations.
 
 ---
 
@@ -55,25 +58,32 @@ bounded HTML/capture inputs to the OpenAI Responses API; exact edits, files,
 Playwright rendering, and OpenCV matching remain local. `./workspace/`
 **persists between runs** — wipe it between customers.
 
-**Ceiling:** one person, one laptop, one migration at a time.
+**Ceiling:** one person, one laptop, one batch at a time.
 
 ---
 
 ## 4. What you hand over
 
     shoe-brand/
-      templates/       their emails, rewired
-      components/      each shared block, in one place
-      proof/           before vs after — byte-identical
-      plain-export/    their emails with everything pasted back in
-      HOW-TO.md
+      *.html                  their emails, with the change applied
+      log.md                  each change: the span, the from, the to, and
+                              which files it covered
+      changes/001-….mjs       the script that made that edit, re-runnable
+      progress.json           what has been processed
 
-`proof/` sells the job. `plain-export/` removes their reason to say no — if they
-hate it, their templates work with no trace of your tool.
+    artifacts/                kept separate from anything you deliver
+      captures/before|after/  the renders every verdict was made on
+      evidence.jsonl          each validation decision, in order
 
-**The handover demo:** ask for a real change they need. Edit the one component
-file. Re-run the handover. Thirty seconds, for something that used to take two
-days.
+They get their own files back — ordinary HTML, minus the thing you changed. So
+there is no "what if we hate it" conversation to have.
+
+**`log.md` sells the job.** It reads as a receipt, down to `span: 56 bytes (3.2%
+of the element)` and a per-file coverage table. The files it could *not* match
+sell the next one: those are usually the ones that drifted.
+
+**The demo:** ask for a real change they need. Run it in front of them. Minutes,
+for something that used to take two days.
 
 ---
 
@@ -91,9 +101,10 @@ smaller, cheaper job and you should quote it that way.
   three still say the old address because someone missed them last time.
   **You just found a live bug before doing any work.**
 - **Blind to the boring repeats.** Nobody mentions the preheader, the spacer row,
-  the social strip, the "view in browser" line. All identical, all extractable.
-- **They think in emails, not components.** "What's shared?" gets you "our
-  branding", not a list of blocks with boundaries.
+  the social strip, the "view in browser" line. All identical, all stale in the
+  same way, all fixable in one pass.
+- **They think in emails, not in the thing that repeats.** "What's shared?" gets
+  you "our branding", not "the address, the CTA colour, the legal line".
 - **They may not have written them.** A marketing manager has no idea what is in
   the MJML.
 
