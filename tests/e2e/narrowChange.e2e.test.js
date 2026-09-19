@@ -2,11 +2,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyChange, normalizeForComparison } from "../../src/changeNarrower.js";
-import { narrowProposal, proposeChange, readJob } from "../../src/index.js";
+import { normalizeForComparison } from "../../src/html.js";
+import { narrowProposal, proposeChange, readJob } from "../../src/job.js";
 import { GROUPS, SHAPES, buildEmails, fileName } from "./emails.js";
 
 const hasKey = Boolean(process.env.OPENAI_API_KEY);
+
+function applyChange(source, change) {
+  const at = source.indexOf(change.from);
+  if (at === -1 || source.indexOf(change.from, at + change.from.length) !== -1) {
+    throw new Error("Refusing to apply a change that is not unique.");
+  }
+  return source.slice(0, at) + change.to + source.slice(at + change.from.length);
+}
 
 let root;
 

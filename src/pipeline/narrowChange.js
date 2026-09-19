@@ -1,8 +1,9 @@
-import { DEFAULT_MODEL, runLunaJson } from "./luna.js";
+import { normalizeForComparison } from "../html.js";
+import { DEFAULT_MODEL, runLunaJson } from "../luna.js";
 
-export const CHANGE_SPAN_SCHEMA_NAME = "email_change_span";
+const CHANGE_SPAN_SCHEMA_NAME = "email_change_span";
 
-export const CHANGE_SPAN_SCHEMA = {
+const CHANGE_SPAN_SCHEMA = {
   type: "object",
   properties: {
     status: { enum: ["narrowed", "not_applicable", "review"] },
@@ -33,30 +34,6 @@ ${elementHtml}
 </email_html>`;
 }
 
-const ENTITIES = {
-  "&bull;": "•",
-  "&copy;": "©",
-  "&reg;": "®",
-  "&nbsp;": " ",
-  "&amp;": "&",
-  "&quot;": '"',
-  "&apos;": "'",
-  "&mdash;": "—",
-  "&ndash;": "–",
-};
-
-export function normalizeForComparison(value) {
-  return value
-    .replace(/&#(\d+);/gu, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/giu, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&[a-z]+;/giu, (entity) => ENTITIES[entity.toLowerCase()] ?? entity)
-    .replace(/<br\s*\/?>/giu, " ")
-    .replace(/<[^>]*>/gu, "")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .toLowerCase();
-}
-
 export function buildChangeRequest(find, replacement) {
   if (!find?.trim()) throw new Error("A find phase is required.");
   if (!replacement?.trim()) throw new Error("A replacement phase is required.");
@@ -71,7 +48,7 @@ export function replacementLanded(to, replacement) {
 
 export async function narrowChangeWithLuna(
   elementHtml,
-  { text, expectFrom, replacement, model = DEFAULT_MODEL, runLuna = runLunaJson } = {},
+  { text, replacement, model = DEFAULT_MODEL, runLuna = runLunaJson } = {},
 ) {
   if (!text?.trim()) throw new Error("A requested item is required.");
   const response = await runLuna({
@@ -103,11 +80,6 @@ export async function narrowChangeWithLuna(
       `The change describes a property to update, but the narrowed result writes the words of the request into the email: ${JSON.stringify(response.to.slice(0, 80))}.`,
     );
   }
-  if (expectFrom && !normalizeForComparison(response.from).includes(normalizeForComparison(expectFrom))) {
-    throw new Error(
-      `The narrowed span does not carry the value the request named. Expected ${JSON.stringify(expectFrom)}, got ${JSON.stringify(response.from.slice(0, 80))}.`,
-    );
-  }
   return {
     from: response.from,
     to: response.to,
@@ -132,18 +104,10 @@ export function checkDeterminism(files, change) {
     const status = occurrences === 1 ? "unique" : occurrences === 0 ? "absent" : "ambiguous";
     return { file: file.id, occurrences, status };
   });
-  const unique = perFile.filter((entry) => entry.status === "unique").length;
   const status = perFile.every((entry) => entry.status === "unique")
     ? "deterministic"
     : perFile.some((entry) => entry.status === "ambiguous")
       ? "ambiguous"
       : "partial";
-  return { perFile, unique, status };
-}
-
-export function applyChange(source, change) {
-  const found = occurrencesOf(source, change.from);
-  if (found.length !== 1) throw new Error(`Refusing to apply a change that matches ${found.length} times.`);
-  const at = found[0];
-  return source.slice(0, at) + change.to + source.slice(at + change.from.length);
+  return { perFile, status };
 }

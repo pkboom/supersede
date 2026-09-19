@@ -1,10 +1,10 @@
 # Interactive flow checklist
 
-The flow `src/index.js` drives, one change per pass:
+The flow `src/cli.js` drives, one change per pass:
 
 ```
-  put email files in workspace/<job>            e.g. workspace/delta
-  node src/index.js
+  put email files in asset/<job>                e.g. asset/delta
+  node src/cli.js
 <start>
   ask for one change request                    e.g. find the Submit button and make it blue
   split it into two phases                      phase 1 what to find, phase 2 what it becomes
@@ -19,23 +19,45 @@ The flow `src/index.js` drives, one change per pass:
   report what is left, and go back to <start>
 ```
 
+## Layout
+
+```
+src/
+  cli.js                       entry and console rendering; nothing else imports it
+  job.js                       the loop's steps as plain functions, no I/O prompts
+  html.js                      UTF-8 gate, element view, prompt-fence stripping
+  luna.js                      OpenAI Responses client
+  pipeline/
+    splitRequest.js            one typed request -> find phase, replace phase
+    extractElement.js          find phase -> the element it names
+    narrowChange.js            element + both phases -> smallest unique span
+    replacementScript.js       span -> a standalone script that applies it
+    progress.js                what was changed, which files, written to the job folder
+```
+
+`pipeline/` is the five stages in the order the loop runs them. The four files
+above it are the shell: entry, steps, bytes, model.
+
 ## Build
 
-- [x] Extract the element a request refers to (`src/partExtractor.js`).
-- [x] Narrow an element to the smallest span that is unique in every file (`src/changeNarrower.js`).
-- [x] Generate a standalone replacement script per change (`src/replacementScript.js`).
-- [x] Track processed files and applied changes in the job folder (`src/progress.js`).
-- [x] `src/index.js` as the interactive loop with the human review gate.
+- [x] Extract the element a request refers to (`src/pipeline/extractElement.js`).
+- [x] Narrow an element to the smallest span that is unique in every file (`src/pipeline/narrowChange.js`).
+- [x] Generate a standalone replacement script per change (`src/pipeline/replacementScript.js`).
+- [x] Track processed files and applied changes in the job folder (`src/pipeline/progress.js`).
+- [x] `src/cli.js` as the interactive loop with the human review gate.
 - [x] Write the generated script to `<job>/changes/` and the log to `<job>/log.md`.
 - [x] Let the human stop at review, and loop back to `<start>` otherwise.
 - [x] Resume a job: read back what is recorded and report what is left.
 - [x] Split the single request into two phases: what to find, what to replace with.
-- [x] Take one typed request and let Luna do that split (`src/requestSplitter.js`).
+- [x] Take one typed request and let Luna do that split (`src/pipeline/splitRequest.js`).
 - [x] Send phase 1 to extraction alone; join both phases for narrowing (`buildChangeRequest`).
 - [x] Run the generated script from the loop, and record whether it applied.
 - [x] Re-read the emails after applying, so the next pass narrows against current bytes.
 - [x] Report files covered and files still to check after every pass.
-- [x] Carry the two phases through `dev/narrowChangeCommand.js` as well.
+- [x] Split the entry from the library: importing `src/job.js` no longer starts a prompt.
+- [x] Record the files a change actually rewrote, not the files it hoped to cover, so a
+      refusal no longer reports its files as done.
+- [x] `dev/splitRequestCommand.js`: one typed request through Luna, phases printed.
 
 ## Verify
 
@@ -45,18 +67,18 @@ The flow `src/index.js` drives, one change per pass:
 - [x] Assert the loop asks once, splits, and flags a split that leaks the replacement into phase 1.
 - [x] Real-Luna e2e for the split itself, feeding its phases through extraction and narrowing (`tests/e2e/splitRequest.e2e.test.js`).
 - [x] `replacementLanded` also compares raw, so a request sentence written into an attribute is caught: a whole-tag span normalizes to nothing, which used to switch the guard off.
-- [x] Assert the loop no longer calls the requested-item resolver.
 - [x] Cover the apply path: applied, refused, and the next pass narrowing against applied bytes.
 - [x] Run a generated script with `--check` and confirm it writes nothing.
 - [x] Confirm a generated script refuses a file where the span does not match exactly once.
-- [x] Full suite and syntax checks. 95 tests, 16 files, green.
+- [x] Full suite green. 81 tests, 10 files.
+- [x] Cover partial application: two files written, a third refused, and only the two recorded.
 - [ ] Run the real Delta job end to end against Luna: two phases, review, narrow, script, apply, log.
 - [ ] An independent review of the two-phase loop.
 
 ## Lost in the two-phase change
 
 `src/itemResolver.js` resolved a loose request into `current` and `replacement`.
-`src/requestSplitter.js` now splits one typed request into the two phases, but it
+`src/pipeline/splitRequest.js` now splits one typed request into the two phases, but it
 reads the request alone and never the email, so it still resolves no `current`.
 The resolver was deleted along with
 `dev/requestedItemCommand.js`, `dev/requestedItemPromptCommand.js` and their
@@ -75,41 +97,37 @@ be a description rather than a value.
       Today the human approves the element and never sees the span before the
       script runs.
 
-## Orphaned: the validation pipeline
+## Removed: the validation pipeline
 
-`src/index.js` used to be the entry to `runEmailPatternWorkflow`. It is now the
-interactive loop, so **nothing calls that pipeline any more**. The code and its
-tests are intact and green — they are simply unreachable from any command.
+`src/{patternWorkflow,patternAgent,patternLoop,visualValidation,imagePresence}.js`
+and their 25 tests are gone — 1,025 lines, unreachable from any command since
+`src/index.js` stopped being the entry to `runEmailPatternWorkflow`. `git log`
+has them.
 
-| module                    | lines | still reached by                     |
-| ------------------------- | ----- | ------------------------------------ |
-| `src/patternWorkflow.js`  | 255   | nothing but its own tests            |
-| `src/visualValidation.js` | 235   | `patternWorkflow` only               |
-| `src/imagePresence.js`    | 103   | `patternWorkflow` only               |
-| `src/patternAgent.js`     | 315   | also `dev/validateExtractCommand.js` |
-| `src/patternLoop.js`      | 117   | also `dev/validateExtractCommand.js` |
+Removing them also killed the per-attribute/per-text-node half of the old
+`htmlTargets.js` — `buildAnnotatedView`, `materializeEdits`,
+`applyMaterializedEdits`, `assertSafeReplacement` and their parse5 machinery,
+~175 lines with no remaining caller. What survives is `src/html.js`: the UTF-8
+gate and the element view the loop actually uses. `@pkboom/opencv-nodejs` and
+`@playwright/cli` left `package.json` with them.
 
-1,025 lines, 25 tests. `patternAgent` and `patternLoop` stay alive through
-`dev/validateExtractCommand.js`; the other three are reachable only from tests.
+**What this gives up.** The loop proves a change is _deterministic_ — one span,
+unique in every file. It does not prove the result _renders correctly_. Those
+were always different guarantees, and the second one is now off the table. The
+button run is the case in point: Luna passed a file that OpenCV caught. Nothing
+would catch that today.
 
-**What is lost while it sits unused.** The loop proves a change is
-_deterministic_ — one span, unique in every file. It does not prove the result
-_renders correctly_. Those are different guarantees, and the second one is the
-whole reason the Playwright captures, the Luna visual verdict and the OpenCV
-containment check exist. The button run is the case in point: Luna passed a file
-that OpenCV caught, and nothing shipped. Nothing in the loop would catch that
-today.
-
-- [ ] Decide: wire validation into the loop after a script is applied, keep the
-      batch pipeline reachable behind a flag, or drop it and accept that
-      deterministic is the only guarantee on offer.
+Deleting the pipeline also removed `assertSafeReplacement`, which was the only
+markup-safety check in the tree. It sat on the dead branch and never guarded the
+loop, so this is not a regression — but determinism is now the sole guarantee,
+and a span inside a `<script>` or `<style>` body is rewritten like any other.
 
 ## Open, needing a decision
 
-- [ ] `tests/unit/narrowChangeCommand.test.js` outlives `dev/narrowChangeCommand.js`, deleted in `b526210`. The suite has been red since. Restore the command or drop the test.
+- [ ] The generated script applies file by file, so a refusal on the third file
+      leaves the first two written. Deliberate and covered by
+      `tests/unit/replacementScript.test.js`; revisit if a batch ever needs to be
+      all-or-nothing.
 - [ ] `leaks` treats a quoted run in the find phase as the value being retired, so it stays quiet when a shortening edit names part of the old text. An unquoted request that shortens a label is flagged anyway. The note is advisory; the human still reviews the element.
 - [ ] A colour change touches several occurrences (`bgcolor`, `background-color`, `border`), so one span cannot express it. Narrowing returns `ambiguous` today. Either return several spans, or widen to one span covering them all.
-- [ ] A non-visual change such as an `href` edit cannot reach `pass` in the batch validator, because the visual prompt returns `review` for anything a capture cannot show.
 - [ ] `decodeHtml` consumes a UTF-8 BOM, so a BOM-led file does not round-trip byte-identically.
-- [ ] `pattern.id` hashes pre-strip rules, so the repeated-failed-pattern guard misses equivalent patterns.
-- [ ] A file that is last in `pending` gets one validation attempt regardless of `--max-validation-attempts`.

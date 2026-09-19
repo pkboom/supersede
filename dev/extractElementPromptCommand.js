@@ -1,15 +1,15 @@
 import { input } from "@inquirer/prompts";
-import fs from "node:fs";
+import fs, { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import yargs from "yargs/yargs";
-import { buildElementAnnotatedView, decodeHtml } from "../src/htmlTargets.js";
+import { buildElementAnnotatedView, decodeHtml } from "../src/html.js";
 import { DEFAULT_MODEL } from "../src/luna.js";
-import { PART_SCHEMA, PART_SCHEMA_NAME, buildRelatedPartPrompt } from "../src/partExtractor.js";
+import { PART_SCHEMA, PART_SCHEMA_NAME, buildRelatedPartPrompt } from "../src/pipeline/extractElement.js";
 
 const devDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.resolve(devDirectory, "..");
-export const defaultEmailFile = path.join(rootDirectory, "asset", "sample.html");
+export const defaultEmailFile = path.join(rootDirectory, "asset", "sample", "sample.html");
 
 export function extractElementPrompt({ find, file = defaultEmailFile }) {
   if (!find?.trim()) throw new Error("A find phase is required.");
@@ -56,9 +56,9 @@ export async function main(values = {}) {
   console.log(result.prompt);
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+const isMain = process.argv[1] && import.meta.filename === realpathSync(path.resolve(process.argv[1]));
 if (isMain) {
-  const argv = yargs(process.argv.slice(2)).string(["value1", "value2", "value3"]).parse();
+  const argv = yargs(process.argv.slice(2)).string(["value1", "value2"]).parse();
   main({ find: argv.value1, file: argv.value2 }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

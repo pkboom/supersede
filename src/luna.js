@@ -14,46 +14,24 @@ function resolveApiKey(explicitKey) {
   return process.env.OPENAI_API_KEY;
 }
 
-function imageDataUrl(file) {
-  const extension = path.extname(file).toLowerCase();
-  const mime = extension === ".png"
-    ? "image/png"
-    : extension === ".webp"
-      ? "image/webp"
-      : "image/jpeg";
-  return `data:${mime};base64,${fs.readFileSync(file).toString("base64")}`;
-}
-
 export async function runLunaJson({
   prompt,
   schema,
-  images = [],
+  schemaName,
   model = DEFAULT_MODEL,
   client,
   apiKey,
   timeoutMs = 180_000,
-  schemaName = "email_pattern_result",
 }) {
   const resolvedApiKey = resolveApiKey(apiKey);
   if (!client && !resolvedApiKey) {
     throw new Error("OPENAI_API_KEY is required for Luna Responses API calls.");
   }
   const openai = client ?? new OpenAI({ apiKey: resolvedApiKey, timeout: timeoutMs });
-  const input = images.length
-    ? [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: prompt },
-            ...images.map((file) => ({ type: "input_image", image_url: imageDataUrl(file), detail: "high" })),
-          ],
-        },
-      ]
-    : prompt;
   const response = await openai.responses.create(
     {
       model,
-      input,
+      input: prompt,
       reasoning: { effort: "low" },
       text: {
         verbosity: "low",

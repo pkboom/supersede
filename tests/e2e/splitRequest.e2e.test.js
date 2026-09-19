@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeForComparison } from "../../src/changeNarrower.js";
-import { narrowProposal, proposeChange, readJob, splitRequest } from "../../src/index.js";
+import { normalizeForComparison } from "../../src/html.js";
+import { narrowProposal, proposeChange, readJob } from "../../src/job.js";
+import { splitRequestWithLuna } from "../../src/pipeline/splitRequest.js";
 import { GROUPS, buildEmails, fileName } from "./emails.js";
 
 const hasKey = Boolean(process.env.OPENAI_API_KEY);
@@ -26,7 +27,7 @@ function carries(value, expected) {
 describe.skipIf(!hasKey)("split one request against Luna", () => {
   for (const [label, group] of Object.entries(GROUPS)) {
     it(label, async () => {
-      const split = await splitRequest(group.instruction);
+      const split = await splitRequestWithLuna(group.instruction);
 
       expect(split.instruction).toBe(group.instruction);
       carries(split.find, group.splitFindCarries);

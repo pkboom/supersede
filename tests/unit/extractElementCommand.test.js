@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultEmailFile, extractElement } from "../../dev/extractElementCommand.js";
-import { buildElementAnnotatedView, decodeHtml } from "../../src/htmlTargets.js";
+import { buildElementAnnotatedView, decodeHtml } from "../../src/html.js";
 import { readFileSync } from "node:fs";
 
 function selector(predicate) {

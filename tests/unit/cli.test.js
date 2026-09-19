@@ -3,9 +3,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main, readJob, remainingFiles } from "../../src/index.js";
-import { buildElementAnnotatedView } from "../../src/htmlTargets.js";
-import { processedFiles, readProgress } from "../../src/progress.js";
+import { main } from "../../src/cli.js";
+import { readJob, remainingFiles } from "../../src/job.js";
+import { buildElementAnnotatedView } from "../../src/html.js";
+import { processedFiles, readProgress } from "../../src/pipeline/progress.js";
 
 const INSTRUCTION = `find the address in the footer and replace it with "New Street, New York"`;
 const FIND = "the address in the footer";

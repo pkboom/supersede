@@ -1,9 +1,9 @@
-import { DEFAULT_MODEL, runLunaJson } from "./luna.js";
-import { normalizeForComparison } from "./changeNarrower.js";
+import { DEFAULT_MODEL, runLunaJson } from "../luna.js";
+import { normalizeForComparison } from "../html.js";
 
-export const REQUEST_SPLIT_SCHEMA_NAME = "email_request_split";
+const REQUEST_SPLIT_SCHEMA_NAME = "email_request_split";
 
-export const REQUEST_SPLIT_SCHEMA = {
+const REQUEST_SPLIT_SCHEMA = {
   type: "object",
   properties: {
     status: { enum: ["split", "unclear"] },

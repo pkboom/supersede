@@ -5,6 +5,7 @@ dist/
 Thumbs.db
 
 .omc/
-workspace/*/changes/
-workspace/*/progress.json
-workspace/*/log.md
+asset/sample/extracted-pattern.html
+asset/*/changes/
+asset/*/progress.json
+asset/*/log.md

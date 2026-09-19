@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { defaultEmailFile, extractElementPrompt } from "../../dev/extractElementPromptCommand.js";
-import { decodeHtml } from "../../src/htmlTargets.js";
-import { extractRelatedPartWithLuna } from "../../src/partExtractor.js";
+import { decodeHtml } from "../../src/html.js";
+import { extractRelatedPartWithLuna } from "../../src/pipeline/extractElement.js";
 
 describe("extractElementPromptCommand", () => {
   it("shows the entered text inside the fenced prompt", () => {

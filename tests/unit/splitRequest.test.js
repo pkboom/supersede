@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildRequestSplitPrompt, leaks, splitRequestWithLuna } from "../../src/requestSplitter.js";
+import { buildRequestSplitPrompt, leaks, splitRequestWithLuna } from "../../src/pipeline/splitRequest.js";
 
 const INSTRUCTION = `find an address and replace it with '1234, Main St.'`;
 

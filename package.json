@@ -2,7 +2,7 @@
   "name": "supersede",
   "version": "0.0.1",
   "private": true,
-  "description": "Local HTML email component and pattern editing toolkit.",
+  "description": "Local HTML email change-and-prove toolkit.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -13,8 +13,6 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.7.2",
-    "@pkboom/opencv-nodejs": "^1.0.5",
-    "@playwright/cli": "^0.1.20",
     "fuzzy": "^0.1.3",
     "inquirer-autocomplete-standalone": "^0.8.1",
     "openai": "^7.18.0",

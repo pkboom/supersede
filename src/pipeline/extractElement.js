@@ -1,5 +1,5 @@
-import { buildElementAnnotatedView } from "./htmlTargets.js";
-import { DEFAULT_MODEL, runLunaJson } from "./luna.js";
+import { buildElementAnnotatedView } from "../html.js";
+import { DEFAULT_MODEL, runLunaJson } from "../luna.js";
 
 export const PART_SCHEMA = {
   type: "object",

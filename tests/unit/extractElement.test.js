@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildElementAnnotatedView } from "../../src/htmlTargets.js";
-import { extractRelatedPartWithLuna } from "../../src/partExtractor.js";
+import { buildElementAnnotatedView } from "../../src/html.js";
+import { extractRelatedPartWithLuna } from "../../src/pipeline/extractElement.js";
 
 const address = `<table><tr><td>123 Old Street<br>Toronto, <strong>ON</strong> M1M 1M1</td></tr></table>`;
 

@@ -6,7 +6,6 @@ const command = path.join(args.devDir, `${args.command}.js`);
 const options = [
   ["--value1", args.value1],
   ["--value2", args.value2],
-  ["--value3", args.value3],
   ["--devDir", args.devDir],
 ]
   .filter(([, value]) => value !== undefined && value !== null && value !== "")

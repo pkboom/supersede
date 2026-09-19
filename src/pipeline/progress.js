@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const PROGRESS_FILE = "progress.json";
-export const LOG_FILE = "log.md";
+const PROGRESS_FILE = "progress.json";
+const LOG_FILE = "log.md";
 export const CHANGES_DIRECTORY = "changes";
 
 export function readProgress(workspace) {
@@ -32,7 +32,7 @@ function truncate(value, limit = 100) {
   return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
 }
 
-export function formatLogEntry(entry) {
+function formatLogEntry(entry) {
   const lines = [`## ${entry.at} — ${truncate(entry.request)}`, ""];
   if (entry.instruction) lines.push(`- asked: ${truncate(entry.instruction, 200)}`);
   lines.push(`- find: ${truncate(entry.find, 200)}`);
@@ -49,7 +49,7 @@ export function formatLogEntry(entry) {
   return lines.join("\n");
 }
 
-export function appendLog(workspace, entry) {
+function appendLog(workspace, entry) {
   const file = path.join(path.resolve(workspace), LOG_FILE);
   const header = fs.existsSync(file) ? "" : "# Job log\n\n";
   fs.appendFileSync(file, `${header}${formatLogEntry(entry)}\n`, "utf8");

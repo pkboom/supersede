@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  applyChange,
   buildChangeSpanPrompt,
   checkDeterminism,
   narrowChangeWithLuna,
-  normalizeForComparison,
   occurrencesOf,
   replacementLanded,
-} from "../../src/changeNarrower.js";
+} from "../../src/pipeline/narrowChange.js";
+import { normalizeForComparison } from "../../src/html.js";
 
 const element = `<td id="Footer">\n  &copy; 2026 Example\n  123 Old Street &bull; Springfield, IL 62704<br>\n</td>`;
 const span = "123 Old Street &bull; Springfield, IL 62704";
@@ -81,40 +80,12 @@ describe("change narrowing", () => {
     expect(ambiguous.perFile[0].occurrences).toBe(2);
   });
 
-  it("refuses to apply a change that is not unique", () => {
-    expect(applyChange("x OLD y", { from: "OLD", to: "NEW" })).toBe("x NEW y");
-    expect(() => applyChange("OLD OLD", { from: "OLD", to: "NEW" })).toThrow(/matches 2 times/i);
-    expect(() => applyChange("nothing", { from: "OLD", to: "NEW" })).toThrow(/matches 0 times/i);
-  });
-
-  it("applies a replacement literally, without treating $ as a pattern", () => {
-    expect(applyChange("price OLD here", { from: "OLD", to: "$& $1 $'" })).toBe("price $& $1 $' here");
-  });
-
   it("asks for the shortest run and fences the element", () => {
     const prompt = buildChangeSpanPrompt("Replace a with b", element);
 
     expect(prompt).toContain("shortest run that covers the whole change");
     expect(prompt).toContain("<email_html>");
     expect(prompt).toContain("</email_html>");
-  });
-
-  it("rejects a span that does not carry the value the request named", async () => {
-    await expect(narrowChangeWithLuna(element, {
-      text: `Replace the button colour "#E51937" with "#00529B".`,
-      expectFrom: "#E51937",
-      runLuna: luna({ status: "narrowed", from: "123 Old Street", to: "#00529B", reason: "x" }),
-    })).rejects.toThrow(/does not carry the value the request named/i);
-  });
-
-  it("accepts a span whose entities differ from the value the request named", async () => {
-    const change = await narrowChangeWithLuna(element, {
-      text: `Replace the address "123 Old Street • Springfield, IL 62704" with "1 New Street".`,
-      expectFrom: "123 Old Street • Springfield, IL 62704",
-      runLuna: luna({ status: "narrowed", from: span, to: "1 New Street", reason: "x" }),
-    });
-
-    expect(change.from).toBe(span);
   });
 
   it("refuses to write the words of a property change into the email", async () => {

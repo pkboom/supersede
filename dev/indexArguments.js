@@ -9,8 +9,7 @@ import { defaultEmailFile } from "./extractElementCommand.js";
 const descriptions = {
   extractElementCommand: "Phase 1 alone: extract the element it names",
   extractElementPromptCommand: "Phase 1 prompt only, without calling Luna",
-  narrowChangeCommand: "Both phases: extract, narrow, and check determinism",
-  validateExtractCommand: "Run the validateExtract.md scenarios",
+  splitRequestCommand: "Split one typed request into its find and replace phases",
 };
 
 async function search(options, query = "") {
@@ -35,18 +34,10 @@ answers.command = await autocomplete({
   default: "extractElementCommand",
 });
 
-if (answers.command === "narrowChangeCommand") {
+if (answers.command === "splitRequestCommand") {
   answers.value1 = await input({
-    message: "What should I find?",
+    message: "What should I change?",
     required: true,
-  });
-  answers.value3 = await input({
-    message: "What should it be replaced with?",
-    required: true,
-  });
-  answers.value2 = await input({
-    message: "Workspace folder?",
-    default: path.join(path.dirname(devDir), "workspace", "delta"),
   });
 }
 
@@ -58,19 +49,6 @@ if (["extractElementCommand", "extractElementPromptCommand"].includes(answers.co
   answers.value2 = await input({
     message: "Email file?",
     default: defaultEmailFile,
-  });
-}
-
-if (answers.command === "validateExtractCommand") {
-  answers.value1 = await autocomplete({
-    message: "Which extract scenarios?",
-    source: async (query = "") => search(["all", "exact-text", "similar-text", "button"], query),
-    default: "all",
-  });
-  answers.value2 = await autocomplete({
-    message: "Run against Luna?",
-    source: async (query = "") => search(["offline", "live"], query),
-    default: "offline",
   });
 }
 

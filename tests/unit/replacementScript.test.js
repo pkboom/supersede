@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildReplacementScript, changeSlug } from "../../src/replacementScript.js";
+import { buildReplacementScript, changeSlug } from "../../src/pipeline/replacementScript.js";
 
 const FROM = "Old Street &bull; Springfield";
 const TO = "New Street, New York";
@@ -84,6 +84,13 @@ describe("the generated script", () => {
     write();
 
     expect(() => run()).toThrow();
+  });
+
+  it("applies a replacement literally, without treating $ as a pattern", () => {
+    write({ to: "$& $1 $'" });
+    run();
+
+    expect(readFileSync(join(root, "a.html"), "utf8")).toBe(`<td>$& $1 $' one</td>`);
   });
 
   it("still applies the files it can when another is refused", () => {
