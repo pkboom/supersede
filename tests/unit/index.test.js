@@ -7,6 +7,7 @@ import { main, readJob, remainingFiles } from "../../src/index.js";
 import { buildElementAnnotatedView } from "../../src/htmlTargets.js";
 import { processedFiles, readProgress } from "../../src/progress.js";
 
+const INSTRUCTION = `find the address in the footer and replace it with "New Street, New York"`;
 const FIND = "the address in the footer";
 const REPLACEMENT = "New Street, New York";
 const OLD = `Old Street &bull; Springfield`;
@@ -31,10 +32,14 @@ function footerId(source) {
     .id;
 }
 
-function luna({ from = OLD, to = REPLACEMENT, seen = [] } = {}) {
+function luna({ from = OLD, to = REPLACEMENT, seen = [], find = FIND, replacement = REPLACEMENT } = {}) {
   return async ({ schema, prompt }) => {
     const statuses = schema.properties.status.enum;
     if (statuses.includes("resolved")) throw new Error("The loop must not call the requested-item resolver.");
+    if (statuses.includes("split")) {
+      seen.push({ phase: "split", prompt });
+      return { status: "split", find, replacement, reason: "x" };
+    }
     if (statuses.includes("found")) {
       seen.push({ phase: "find", prompt });
       return { status: "found", elementId: footerId(readFileSync(join(root, "a.html"), "utf8")), reason: "x" };
@@ -44,24 +49,22 @@ function luna({ from = OLD, to = REPLACEMENT, seen = [] } = {}) {
   };
 }
 
-function asking({ finds, replacements, looksRight = [true], again = [false] }) {
+function asking({ instructions, looksRight = [true], again = [false] }) {
   const queue = {
-    finds: [...finds],
-    replacements: [...replacements],
+    instructions: [...instructions],
     looksRight: [...looksRight],
     again: [...again],
   };
   return {
     workspace: vi.fn(async () => root),
-    find: vi.fn(async () => queue.finds.shift()),
-    replacement: vi.fn(async () => queue.replacements.shift()),
+    instruction: vi.fn(async () => queue.instructions.shift()),
     looksRight: vi.fn(async () => queue.looksRight.shift()),
     again: vi.fn(async () => queue.again.shift()),
   };
 }
 
 function onePass(overrides = {}) {
-  return asking({ finds: [FIND], replacements: [REPLACEMENT], ...overrides });
+  return asking({ instructions: [INSTRUCTION], ...overrides });
 }
 
 describe("interactive flow", () => {
@@ -73,37 +76,72 @@ describe("interactive flow", () => {
     expect(job.files.map((file) => file.id)).toEqual(["a.html", "b.html"]);
   });
 
-  it("asks for the two phases separately", async () => {
+  it("asks the human for one request and nothing else", async () => {
     const ask = onePass();
     await main([root], ask, { runLuna: luna() });
 
-    expect(ask.find).toHaveBeenCalledTimes(1);
-    expect(ask.replacement).toHaveBeenCalledTimes(1);
+    expect(ask.instruction).toHaveBeenCalledTimes(1);
+    expect(ask.find).toBeUndefined();
+    expect(ask.replacement).toBeUndefined();
   });
 
-  it("sends the find phase to extraction and both phases to narrowing", async () => {
+  it("splits the request, then sends each phase where it belongs", async () => {
     const seen = [];
     await main([root], onePass(), { runLuna: luna({ seen }) });
 
-    expect(seen.map((call) => call.phase)).toEqual(["find", "narrow"]);
-    expect(seen[0].prompt).toContain(`User request: ${FIND}`);
-    expect(seen[0].prompt).not.toContain(REPLACEMENT);
-    expect(seen[1].prompt).toContain(`Target: ${FIND}\nRequested change: ${REPLACEMENT}`);
+    expect(seen.map((call) => call.phase)).toEqual(["split", "find", "narrow"]);
+    expect(seen[0].prompt).toContain(`Request: ${INSTRUCTION}`);
+    expect(seen[1].prompt).toContain(`User request: ${FIND}`);
+    expect(seen[1].prompt).not.toContain(REPLACEMENT);
+    expect(seen[2].prompt).toContain(`Target: ${FIND}\nRequested change: ${REPLACEMENT}`);
   });
 
-  it("asks for both phases before showing the element to review", async () => {
+  it("splits the request before showing the element to review", async () => {
     const order = [];
+    const seen = [];
     const ask = onePass({ looksRight: [false] });
-    for (const name of ["find", "replacement", "looksRight"]) {
+    for (const name of ["instruction", "looksRight"]) {
       const original = ask[name];
       ask[name] = vi.fn(async () => {
         order.push(name);
         return original();
       });
     }
-    await main([root], ask, { runLuna: luna() });
+    await main([root], ask, { runLuna: luna({ seen }) });
 
-    expect(order).toEqual(["find", "replacement", "looksRight"]);
+    expect(order).toEqual(["instruction", "looksRight"]);
+    expect(seen.map((call) => call.phase)).toEqual(["split", "find"]);
+  });
+
+  it("asks again instead of ending the session when the split fails", async () => {
+    const ask = asking({ instructions: ["make it nicer", INSTRUCTION], again: [true, false] });
+    const calls = [];
+    const runLuna = async (call) => {
+      const statuses = call.schema.properties.status.enum;
+      if (statuses.includes("split")) {
+        calls.push("split");
+        return calls.length === 1
+          ? { status: "unclear", find: "", replacement: "", reason: "No new value given." }
+          : { status: "split", find: FIND, replacement: REPLACEMENT, reason: "x" };
+      }
+      return luna()(call);
+    };
+
+    const result = await main([root], ask, { runLuna });
+
+    expect(result.stopped).toBe(false);
+    expect(ask.instruction).toHaveBeenCalledTimes(2);
+    expect(readProgress(root).changes).toHaveLength(1);
+  });
+
+  it("writes nothing and does not reach the review gate when a split fails", async () => {
+    const ask = asking({ instructions: ["make it nicer"], again: [false] });
+    const runLuna = async () => ({ status: "unclear", find: "", replacement: "", reason: "No new value given." });
+
+    await main([root], ask, { runLuna });
+
+    expect(ask.looksRight).not.toHaveBeenCalled();
+    expect(readdirSync(root).sort()).toEqual(["a.html", "b.html"]);
   });
 
   it("stops without writing when the human rejects the element", async () => {
@@ -123,12 +161,14 @@ describe("interactive flow", () => {
     expect(processedFiles(progress)).toEqual(["a.html", "b.html"]);
 
     const change = progress.changes[0];
+    expect(change.instruction).toBe(INSTRUCTION);
     expect(change.find).toBe(FIND);
     expect(change.replacement).toBe(REPLACEMENT);
     expect(change.from).toBe(OLD);
     expect(change.determinism).toBe("deterministic");
 
     const log = readFileSync(join(root, "log.md"), "utf8");
+    expect(log).toContain(`- asked: ${INSTRUCTION}`);
     expect(log).toContain(`- find: ${FIND}`);
     expect(log).toContain(`- replace with: ${REPLACEMENT}`);
   });
@@ -174,15 +214,18 @@ describe("interactive flow", () => {
 
   it("narrows the next change against the files as the script left them", async () => {
     const seen = [];
+    const replacements = [REPLACEMENT, "Third Street, Boston"];
     const ask = asking({
-      finds: [FIND, FIND],
-      replacements: [REPLACEMENT, "Third Street, Boston"],
+      instructions: [INSTRUCTION, `find the address in the footer and replace it with "Third Street, Boston"`],
       looksRight: [true, true],
       again: [true, false],
     });
     await main([root], ask, {
       runLuna: async (call) => {
         const statuses = call.schema.properties.status.enum;
+        if (statuses.includes("split")) {
+          return { status: "split", find: FIND, replacement: replacements.shift(), reason: "x" };
+        }
         if (statuses.includes("found")) {
           return { status: "found", elementId: footerId(readFileSync(join(root, "a.html"), "utf8")), reason: "x" };
         }

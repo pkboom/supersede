@@ -6,8 +6,8 @@ The flow `src/index.js` drives, one change per pass:
   put email files in workspace/<job>            e.g. workspace/delta
   node src/index.js
 <start>
-  ask what to find                              phase 1
-  ask what to replace it with                   phase 2
+  ask for one change request                    e.g. find the Submit button and make it blue
+  split it into two phases                      phase 1 what to find, phase 2 what it becomes
   extract the element phase 1 names
   SHOW IT — human reviews
     looks wrong  -> stop
@@ -30,6 +30,7 @@ The flow `src/index.js` drives, one change per pass:
 - [x] Let the human stop at review, and loop back to `<start>` otherwise.
 - [x] Resume a job: read back what is recorded and report what is left.
 - [x] Split the single request into two phases: what to find, what to replace with.
+- [x] Take one typed request and let Luna do that split (`src/requestSplitter.js`).
 - [x] Send phase 1 to extraction alone; join both phases for narrowing (`buildChangeRequest`).
 - [x] Run the generated script from the loop, and record whether it applied.
 - [x] Re-read the emails after applying, so the next pass narrows against current bytes.
@@ -41,6 +42,9 @@ The flow `src/index.js` drives, one change per pass:
 - [x] Unit tests for the script generator, progress tracking, and the loop's decisions.
 - [x] Drive the loop non-interactively in tests by injecting the prompts.
 - [x] Assert phase 1 reaches extraction without the replacement leaking into that prompt.
+- [x] Assert the loop asks once, splits, and flags a split that leaks the replacement into phase 1.
+- [x] Real-Luna e2e for the split itself, feeding its phases through extraction and narrowing (`tests/e2e/splitRequest.e2e.test.js`).
+- [x] `replacementLanded` also compares raw, so a request sentence written into an attribute is caught: a whole-tag span normalizes to nothing, which used to switch the guard off.
 - [x] Assert the loop no longer calls the requested-item resolver.
 - [x] Cover the apply path: applied, refused, and the next pass narrowing against applied bytes.
 - [x] Run a generated script with `--check` and confirm it writes nothing.
@@ -52,7 +56,9 @@ The flow `src/index.js` drives, one change per pass:
 ## Lost in the two-phase change
 
 `src/itemResolver.js` resolved a loose request into `current` and `replacement`.
-The human now types both, so it was deleted along with
+`src/requestSplitter.js` now splits one typed request into the two phases, but it
+reads the request alone and never the email, so it still resolves no `current`.
+The resolver was deleted along with
 `dev/requestedItemCommand.js`, `dev/requestedItemPromptCommand.js` and their
 12 tests. `git log` has them.
 
@@ -100,6 +106,8 @@ today.
 
 ## Open, needing a decision
 
+- [ ] `tests/unit/narrowChangeCommand.test.js` outlives `dev/narrowChangeCommand.js`, deleted in `b526210`. The suite has been red since. Restore the command or drop the test.
+- [ ] `leaks` treats a quoted run in the find phase as the value being retired, so it stays quiet when a shortening edit names part of the old text. An unquoted request that shortens a label is flagged anyway. The note is advisory; the human still reviews the element.
 - [ ] A colour change touches several occurrences (`bgcolor`, `background-color`, `border`), so one span cannot express it. Narrowing returns `ambiguous` today. Either return several spans, or widen to one span covering them all.
 - [ ] A non-visual change such as an `href` edit cannot reach `pass` in the batch validator, because the visual prompt returns `review` for anything a capture cannot show.
 - [ ] `decodeHtml` consumes a UTF-8 BOM, so a BOM-led file does not round-trip byte-identically.

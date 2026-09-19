@@ -34,6 +34,7 @@ function truncate(value, limit = 100) {
 
 export function formatLogEntry(entry) {
   const lines = [`## ${entry.at} — ${truncate(entry.request)}`, ""];
+  if (entry.instruction) lines.push(`- asked: ${truncate(entry.instruction, 200)}`);
   lines.push(`- find: ${truncate(entry.find, 200)}`);
   lines.push(`- replace with: ${truncate(entry.replacement, 200)}`);
   lines.push(`- seed: \`${entry.seed}\``);

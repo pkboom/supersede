@@ -6,6 +6,7 @@ import {
   narrowChangeWithLuna,
   normalizeForComparison,
   occurrencesOf,
+  replacementLanded,
 } from "../../src/changeNarrower.js";
 
 const element = `<td id="Footer">\n  &copy; 2026 Example\n  123 Old Street &bull; Springfield, IL 62704<br>\n</td>`;
@@ -165,6 +166,33 @@ describe("change narrowing", () => {
     });
 
     expect(change.to).toBe("Update your details at example.com");
+  });
+
+  it("refuses a property change written into an attribute value", async () => {
+    const button = `<td><a href="https://x"><img src="c.png" alt="Cancel"></a></td>`;
+
+    await expect(narrowChangeWithLuna(button, {
+      text: "Target: the button\nRequested change: set the alt text to Cancel Button",
+      replacement: "set the alt text to Cancel Button",
+      runLuna: luna({
+        status: "narrowed",
+        interpretation: "instruction",
+        from: `alt="Cancel"`,
+        to: `alt="set the alt text to Cancel Button"`,
+        reason: "x",
+      }),
+    })).rejects.toThrow(/writes the words of the request into the email/i);
+  });
+
+  it("sees a request sentence that only ever lands inside a tag", () => {
+    const tag = `<img src="c.png" alt="set the alt text to Cancel Button">`;
+
+    expect(normalizeForComparison(tag)).toBe("");
+    expect(replacementLanded(tag, "set the alt text to Cancel Button")).toBe(true);
+  });
+
+  it("does not call a property change landed when only the markup carries it", () => {
+    expect(replacementLanded(`bgcolor="#87CEEB"`, "update the background to sky blue")).toBe(false);
   });
 
   it("compares entities, tags, and case the same way", () => {

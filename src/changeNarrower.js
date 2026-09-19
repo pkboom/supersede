@@ -64,7 +64,9 @@ export function buildChangeRequest(find, replacement) {
 }
 
 export function replacementLanded(to, replacement) {
-  return normalizeForComparison(to).includes(normalizeForComparison(replacement));
+  const value = normalizeForComparison(replacement);
+  if (value && normalizeForComparison(to).includes(value)) return true;
+  return to.toLowerCase().includes(replacement.toLowerCase().trim());
 }
 
 export async function narrowChangeWithLuna(

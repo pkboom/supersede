@@ -12,6 +12,7 @@ import {
 import { decodeHtml } from "./htmlTargets.js";
 import { extractRelatedPartWithLuna } from "./partExtractor.js";
 import { buildReplacementScript, changeSlug } from "./replacementScript.js";
+import { splitRequestWithLuna } from "./requestSplitter.js";
 import {
   CHANGES_DIRECTORY,
   processedFiles,
@@ -51,6 +52,10 @@ export function remainingFiles(job, progress) {
   return job.files.map((file) => file.id).filter((id) => !done.has(id));
 }
 
+export async function splitRequest(instruction, options = {}) {
+  return splitRequestWithLuna(instruction, options);
+}
+
 export async function proposeChange(job, find, options = {}) {
   if (!find?.trim()) throw new Error("A find phase is required.");
   const seed = job.files[0];
@@ -77,7 +82,7 @@ export function runChangeScript(root, script, { run = execFileSync } = {}) {
   }
 }
 
-export function commitChange(job, progress, { proposal, narrowed }, options = {}) {
+export function commitChange(job, progress, { instruction, proposal, narrowed }, options = {}) {
   const name = changeSlug(proposal.find, progress.changes.length + 1);
   const script = path.relative(job.root, writeChangeScript(job.root, name, buildReplacementScript({
     request: narrowed.request,
@@ -90,6 +95,7 @@ export function commitChange(job, progress, { proposal, narrowed }, options = {}
   const spanBytes = narrowed.change.from.length;
   const next = recordChange(job.root, progress, {
     at: new Date().toISOString(),
+    instruction,
     find: proposal.find,
     replacement: narrowed.replacement,
     request: narrowed.request,
@@ -123,8 +129,7 @@ function report(job, progress) {
 
 const askForInput = {
   workspace: () => input({ message: "Workspace folder?", default: DEFAULT_WORKSPACE }),
-  find: () => input({ message: "What should I find?", required: true }),
-  replacement: () => input({ message: "What should it be replaced with?", required: true }),
+  instruction: () => input({ message: "What should I change?", required: true }),
   looksRight: () => confirm({ message: "Does this element look right?", default: true }),
   again: () => confirm({ message: "Another change?", default: true }),
 };
@@ -136,12 +141,23 @@ export async function main(args = process.argv.slice(2), ask = askForInput, opti
   report(job, progress);
 
   for (;;) {
-    const find = await ask.find();
-    const replacement = await ask.replacement();
+    let split;
+    try {
+      split = await splitRequest(await ask.instruction(), options);
+    } catch (error) {
+      console.log(`\nI could not read that as one change: ${error instanceof Error ? error.message : String(error)}`);
+      if (!await ask.again()) return { stopped: false, progress };
+      continue;
+    }
+    const { instruction, find, replacement } = split;
+    console.log(`\nRequest: ${instruction}`);
+    console.log(`Find: ${find}`);
+    console.log(`Replace with: ${replacement}`);
+    if (split.leaks) {
+      console.log(`\nNote: what I search for still carries ${JSON.stringify(replacement)}. The email does not contain it yet, so check the element below is the one you meant.`);
+    }
 
     const proposal = await proposeChange(job, find, options);
-    console.log(`\nFind: ${find}`);
-    console.log(`Replace with: ${replacement}`);
     console.log(`\nElement from ${proposal.seed.id} (${proposal.element.tagName}, ${proposal.element.html.length} bytes):\n`);
     console.log(proposal.element.html);
 
@@ -169,7 +185,7 @@ export async function main(args = process.argv.slice(2), ask = askForInput, opti
       continue;
     }
 
-    const committed = commitChange(job, progress, { proposal, narrowed }, options);
+    const committed = commitChange(job, progress, { instruction, proposal, narrowed }, options);
     progress = committed.progress;
     console.log(`\nScript: ${path.join(job.root, progress.changes.at(-1).script)}\n`);
     console.log(committed.applied.output.trimEnd());
