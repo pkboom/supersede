@@ -4,14 +4,17 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../../src/cli.js";
-import { readJob, remainingFiles } from "../../src/job.js";
+import { readJob, remainingJob } from "../../src/job.js";
 import { buildElementAnnotatedView } from "../../src/html.js";
-import { processedFiles, readProgress } from "../../src/pipeline/progress.js";
+import { readProgress } from "../../src/pipeline/progress.js";
 
 const INSTRUCTION = `find the address in the footer and replace it with "New Street, New York"`;
 const FIND = "the address in the footer";
 const REPLACEMENT = "New Street, New York";
 const OLD = `Old Street &bull; Springfield`;
+const VARIANT = `Old Road &bull; Shelbyville`;
+const FOOTER = `<td id="Footer">`;
+const SHORT_FOOTER = `<td id="Foot">`;
 
 let root;
 
@@ -26,6 +29,14 @@ beforeEach(() => {
 });
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+function read(file) {
+  return readFileSync(join(root, file), "utf8");
+}
+
+function stillToCheck(progress = readProgress(root), sweep) {
+  return remainingJob(readJob(root), progress, sweep).files.map((file) => file.id);
+}
 
 function footerId(source) {
   return [...buildElementAnnotatedView(source).elements.values()]
@@ -43,24 +54,26 @@ function luna({ from = OLD, to = REPLACEMENT, seen = [], find = FIND, replacemen
     }
     if (statuses.includes("found")) {
       seen.push({ phase: "find", prompt });
-      return { status: "found", elementId: footerId(readFileSync(join(root, "a.html"), "utf8")), reason: "x" };
+      return { status: "found", elementId: footerId(read("a.html")), reason: "x" };
     }
     seen.push({ phase: "narrow", prompt });
     return { status: "narrowed", interpretation: "value", from, to, reason: "x" };
   };
 }
 
-function asking({ instructions, looksRight = [true], again = [false] }) {
+function asking({ instructions, looksRight = [true], again = [false], continueSweep = [false] }) {
   const queue = {
     instructions: [...instructions],
     looksRight: [...looksRight],
     again: [...again],
+    continueSweep: [...continueSweep],
   };
   return {
     workspace: vi.fn(async () => root),
     instruction: vi.fn(async () => queue.instructions.shift()),
     looksRight: vi.fn(async () => queue.looksRight.shift()),
     again: vi.fn(async () => queue.again.shift()),
+    continueSweep: vi.fn(async () => queue.continueSweep.shift()),
   };
 }
 
@@ -135,6 +148,44 @@ describe("interactive flow", () => {
     expect(readProgress(root).changes).toHaveLength(1);
   });
 
+  it("asks again when Luna cannot find the element", async () => {
+    const ask = asking({ instructions: [INSTRUCTION, INSTRUCTION], looksRight: [true], again: [true, false] });
+    let found = 0;
+    const runLuna = async (call) => {
+      if (call.schema.properties.status.enum.includes("found")) {
+        found += 1;
+        if (found === 1) return { status: "not_found", elementId: "", reason: "no footer in this email" };
+      }
+      return luna()(call);
+    };
+
+    const result = await main([root], ask, { runLuna });
+
+    expect(result.stopped).toBe(false);
+    expect(ask.instruction).toHaveBeenCalledTimes(2);
+    expect(readProgress(root).changes).toHaveLength(1);
+  });
+
+  it("asks again when Luna cannot narrow the change", async () => {
+    const ask = asking({ instructions: [INSTRUCTION, INSTRUCTION], looksRight: [true, true], again: [true, false] });
+    let narrows = 0;
+    const runLuna = async (call) => {
+      if (call.schema.properties.status.enum.includes("narrowed")) {
+        narrows += 1;
+        if (narrows === 1) {
+          return { status: "not_applicable", interpretation: "value", from: "", to: "", reason: "the element holds no address" };
+        }
+      }
+      return luna()(call);
+    };
+
+    const result = await main([root], ask, { runLuna });
+
+    expect(result.stopped).toBe(false);
+    expect(ask.instruction).toHaveBeenCalledTimes(2);
+    expect(readProgress(root).changes).toHaveLength(1);
+  });
+
   it("writes nothing and does not reach the review gate when a split fails", async () => {
     const ask = asking({ instructions: ["make it nicer"], again: [false] });
     const runLuna = async () => ({ status: "unclear", find: "", replacement: "", reason: "No new value given." });
@@ -143,6 +194,37 @@ describe("interactive flow", () => {
 
     expect(ask.looksRight).not.toHaveBeenCalled();
     expect(readdirSync(root).sort()).toEqual(["a.html", "b.html"]);
+  });
+
+  it("asks nothing before the first request of a fresh job", async () => {
+    const ask = onePass();
+
+    await main([root], ask, { runLuna: luna() });
+
+    expect(ask.continueSweep).not.toHaveBeenCalled();
+    expect(ask.again).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a cancelled prompt end the run", async () => {
+    const ask = onePass();
+    ask.looksRight = vi.fn(async () => {
+      const error = new Error("User force closed the prompt with SIGINT");
+      error.name = "ExitPromptError";
+      throw error;
+    });
+
+    await expect(main([root], ask, { runLuna: luna() })).rejects.toThrow("SIGINT");
+    expect(ask.again).not.toHaveBeenCalled();
+  });
+
+  it("lets a programming error out instead of offering another change", async () => {
+    const ask = onePass();
+    const runLuna = async () => {
+      throw new TypeError("Cannot read properties of undefined");
+    };
+
+    await expect(main([root], ask, { runLuna })).rejects.toThrow(TypeError);
+    expect(ask.again).not.toHaveBeenCalled();
   });
 
   it("stops without writing when the human rejects the element", async () => {
@@ -159,7 +241,7 @@ describe("interactive flow", () => {
 
     const progress = readProgress(root);
     expect(progress.changes).toHaveLength(1);
-    expect(processedFiles(progress)).toEqual(["a.html", "b.html"]);
+    expect(progress.changes[0].files).toEqual(["a.html", "b.html"]);
 
     const change = progress.changes[0];
     expect(change.instruction).toBe(INSTRUCTION);
@@ -168,7 +250,7 @@ describe("interactive flow", () => {
     expect(change.from).toBe(OLD);
     expect(change.determinism).toBe("deterministic");
 
-    const log = readFileSync(join(root, "log.md"), "utf8");
+    const log = read("log.md");
     expect(log).toContain(`- asked: ${INSTRUCTION}`);
     expect(log).toContain(`- find: ${FIND}`);
     expect(log).toContain(`- replace with: ${REPLACEMENT}`);
@@ -178,8 +260,8 @@ describe("interactive flow", () => {
     await main([root], onePass(), { runLuna: luna() });
 
     expect(readProgress(root).changes[0].applied).toBe(true);
-    expect(readFileSync(join(root, "a.html"), "utf8")).toContain(REPLACEMENT);
-    expect(readFileSync(join(root, "b.html"), "utf8")).toContain(REPLACEMENT);
+    expect(read("a.html")).toContain(REPLACEMENT);
+    expect(read("b.html")).toContain(REPLACEMENT);
   });
 
   it("records the change as unapplied when the script refuses", async () => {
@@ -191,8 +273,8 @@ describe("interactive flow", () => {
     await main([root], onePass(), { runLuna: luna(), run });
 
     expect(readProgress(root).changes[0].applied).toBe(false);
-    expect(readFileSync(join(root, "log.md"), "utf8")).toContain("refused, files unchanged");
-    expect(readFileSync(join(root, "a.html"), "utf8")).toContain(OLD);
+    expect(read("log.md")).toContain("refused, files unchanged");
+    expect(read("a.html")).toContain(OLD);
   });
 
   it("refuses a file the span does not match exactly once", async () => {
@@ -201,16 +283,16 @@ describe("interactive flow", () => {
     writeFileSync(join(root, "a.html"), email(`${OLD} one ${OLD} again`));
 
     expect(() => execFileSync(process.execPath, [join(root, change.script)], { stdio: "pipe" })).toThrow();
-    expect(readFileSync(join(root, "a.html"), "utf8")).not.toContain(REPLACEMENT);
+    expect(read("a.html")).not.toContain(REPLACEMENT);
   });
 
-  it("records nothing when the change is not unique in every file", async () => {
+  it("records nothing when the span sits twice in a file still to check", async () => {
     writeFileSync(join(root, "b.html"), email(`${OLD} two ${OLD} twice`));
     await main([root], onePass(), { runLuna: luna() });
 
     expect(readProgress(root).changes).toEqual([]);
     expect(readdirSync(root)).not.toContain("changes");
-    expect(readFileSync(join(root, "a.html"), "utf8")).toContain(OLD);
+    expect(read("a.html")).toContain(OLD);
   });
 
   it("narrows the next change against the files as the script left them", async () => {
@@ -228,7 +310,7 @@ describe("interactive flow", () => {
           return { status: "split", find: FIND, replacement: replacements.shift(), reason: "x" };
         }
         if (statuses.includes("found")) {
-          return { status: "found", elementId: footerId(readFileSync(join(root, "a.html"), "utf8")), reason: "x" };
+          return { status: "found", elementId: footerId(read("a.html")), reason: "x" };
         }
         seen.push(call);
         return seen.length === 1
@@ -240,8 +322,8 @@ describe("interactive flow", () => {
     const progress = readProgress(root);
     expect(progress.changes).toHaveLength(2);
     expect(progress.changes[1].determinism).toBe("deterministic");
-    expect(readFileSync(join(root, "a.html"), "utf8")).toContain("Third Street, Boston");
-    expect(readFileSync(join(root, "b.html"), "utf8")).toContain("Third Street, Boston");
+    expect(read("a.html")).toContain("Third Street, Boston");
+    expect(read("b.html")).toContain("Third Street, Boston");
   });
 
   it("reads back what an earlier run recorded", async () => {
@@ -249,24 +331,238 @@ describe("interactive flow", () => {
     const resumed = readProgress(root);
 
     expect(resumed.changes).toHaveLength(1);
-    expect(processedFiles(resumed)).toEqual(["a.html", "b.html"]);
+    expect(resumed.changes[0].files).toEqual(["a.html", "b.html"]);
+  });
+
+  it("ignores coverage recorded before sweeps existed", async () => {
+    writeFileSync(join(root, "progress.json"), JSON.stringify({ version: 1, changes: [{ files: ["a.html"] }] }));
+
+    await main([root], onePass(), { runLuna: luna() });
+
+    expect(readProgress(root).changes[1].files).toEqual(["a.html", "b.html"]);
+    expect(read("a.html")).toContain(REPLACEMENT);
   });
 });
 
-describe("remainingFiles", () => {
+describe("a sweep the first pass does not finish", () => {
+  beforeEach(() => {
+    writeFileSync(join(root, "c.html"), email(`${VARIANT} three`));
+  });
+
+  function variationLuna({ seen = [], spans = [[OLD, REPLACEMENT], [VARIANT, REPLACEMENT]] } = {}) {
+    let narrows = 0;
+    return async ({ schema, prompt }) => {
+      const statuses = schema.properties.status.enum;
+      if (statuses.includes("split")) {
+        return { status: "split", find: FIND, replacement: REPLACEMENT, reason: "x" };
+      }
+      if (statuses.includes("found")) {
+        seen.push(prompt);
+        const file = prompt.includes("Shelbyville") ? "c.html" : "a.html";
+        return { status: "found", elementId: footerId(read(file)), reason: "x" };
+      }
+      const [from, to] = spans[narrows];
+      narrows += 1;
+      return { status: "narrowed", interpretation: "value", from, to, reason: "x" };
+    };
+  }
+
+  function leaveVariation() {
+    return main([root], asking({ instructions: [INSTRUCTION], continueSweep: [false], again: [false] }), {
+      runLuna: variationLuna(),
+    });
+  }
+
+  function carriesOn(overrides = {}) {
+    return asking({
+      instructions: [INSTRUCTION, INSTRUCTION],
+      looksRight: [true, true],
+      continueSweep: [true],
+      again: [false],
+      ...overrides,
+    });
+  }
+
+  it("applies the change to the files it matches and leaves the variation pending", async () => {
+    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false] });
+
+    const result = await main([root], ask, { runLuna: variationLuna() });
+
+    expect(result.stopped).toBe(false);
+    const change = readProgress(root).changes[0];
+    expect(change.determinism).toBe("partial");
+    expect(change.files).toEqual(["a.html", "b.html"]);
+    expect(read("a.html")).toContain(REPLACEMENT);
+    expect(read("c.html")).toContain(VARIANT);
+    expect(stillToCheck()).toEqual(["c.html"]);
+  });
+
+  it("offers the files left before offering another change", async () => {
+    const order = [];
+    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false] });
+    for (const name of ["continueSweep", "again"]) {
+      const original = ask[name];
+      ask[name] = vi.fn(async () => {
+        order.push(name);
+        return original();
+      });
+    }
+
+    await main([root], ask, { runLuna: variationLuna() });
+
+    expect(order).toEqual(["continueSweep", "again"]);
+  });
+
+  it("opens a new sweep when the human gives up on the files left", async () => {
+    const ask = asking({
+      instructions: [INSTRUCTION, INSTRUCTION],
+      looksRight: [true, true],
+      continueSweep: [false],
+      again: [true, false],
+    });
+    const runLuna = variationLuna({ spans: [[OLD, REPLACEMENT], [FOOTER, SHORT_FOOTER]] });
+
+    await main([root], ask, { runLuna });
+
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 2]);
+    expect(progress.changes[1].files).toEqual(["a.html", "b.html", "c.html"]);
+  });
+
+  it("leaves a file an earlier pass updated alone, even when the next span still matches it", async () => {
+    const ask = carriesOn();
+    const runLuna = variationLuna({ spans: [[OLD, REPLACEMENT], [FOOTER, SHORT_FOOTER]] });
+
+    await main([root], ask, { runLuna });
+
+    expect(read("c.html")).toContain(SHORT_FOOTER);
+    expect(read("a.html")).toContain(FOOTER);
+    expect(readProgress(root).changes[1].files).toEqual(["c.html"]);
+  });
+
+  it("resumes an unfinished sweep on the next run", async () => {
+    await leaveVariation();
+
+    const seen = [];
+    await main([root], asking({ instructions: [INSTRUCTION], continueSweep: [true], again: [false] }), {
+      runLuna: variationLuna({ seen, spans: [[VARIANT, REPLACEMENT]] }),
+    });
+
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 1]);
+    expect(progress.changes[1].files).toEqual(["c.html"]);
+    expect(seen[0]).toContain("Shelbyville");
+  });
+
+  it("asks before scoping a resumed session to the files left", async () => {
+    await leaveVariation();
+
+    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false], again: [true, false] });
+    await main([root], ask, { runLuna: variationLuna({ spans: [[FOOTER, SHORT_FOOTER]] }) });
+
+    expect(ask.continueSweep).toHaveBeenCalledTimes(1);
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 2]);
+    expect(progress.changes[1].files).toEqual(["a.html", "b.html", "c.html"]);
+  });
+
+  it("leaves a resumed session alone when the human keeps the sweep", async () => {
+    await leaveVariation();
+
+    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [true], again: [false] });
+    await main([root], ask, { runLuna: variationLuna({ spans: [[VARIANT, REPLACEMENT]] }) });
+
+    expect(readProgress(root).changes[1].files).toEqual(["c.html"]);
+  });
+
+  it("opens the next sweep on a run after a complete one", async () => {
+    await main([root], carriesOn(), { runLuna: variationLuna() });
+
+    await main([root], asking({ instructions: [INSTRUCTION], again: [false] }), {
+      runLuna: variationLuna({ spans: [[FOOTER, SHORT_FOOTER]] }),
+    });
+
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 1, 2]);
+    expect(progress.changes[2].files).toEqual(["a.html", "b.html", "c.html"]);
+  });
+
+  it("seeds the next pass from a file that is still to check", async () => {
+    const seen = [];
+    const ask = carriesOn();
+
+    await main([root], ask, { runLuna: variationLuna({ seen }) });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toContain("Springfield");
+    expect(seen[1]).toContain("Shelbyville");
+    expect(seen[1]).not.toContain("Springfield");
+  });
+
+  it("finishes the sweep on the second pass, under one sweep", async () => {
+    const ask = carriesOn();
+
+    await main([root], ask, { runLuna: variationLuna() });
+
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 1]);
+    expect(progress.changes[1].determinism).toBe("deterministic");
+    expect(progress.changes[1].files).toEqual(["c.html"]);
+    expect(stillToCheck(progress)).toEqual([]);
+    for (const file of ["a.html", "b.html", "c.html"]) {
+      expect(read(file)).toContain(REPLACEMENT);
+    }
+    expect(ask.again).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a new sweep when another change follows a complete one", async () => {
+    const ask = carriesOn({
+      instructions: [INSTRUCTION, INSTRUCTION, INSTRUCTION],
+      looksRight: [true, true, true],
+      again: [true, false],
+    });
+    const runLuna = variationLuna({ spans: [[OLD, REPLACEMENT], [VARIANT, REPLACEMENT], [FOOTER, SHORT_FOOTER]] });
+
+    await main([root], ask, { runLuna });
+
+    const progress = readProgress(root);
+    expect(progress.changes.map((change) => change.sweep)).toEqual([1, 1, 2]);
+    expect(progress.changes[2].files).toEqual(["a.html", "b.html", "c.html"]);
+  });
+});
+
+describe("remainingJob", () => {
   it("lists every file before any change is recorded", () => {
-    expect(remainingFiles(readJob(root), { changes: [] })).toEqual(["a.html", "b.html"]);
+    expect(stillToCheck({ changes: [] })).toEqual(["a.html", "b.html"]);
   });
 
   it("drops the files a recorded change covered", () => {
+    const progress = { changes: [{ sweep: 1, files: ["a.html"] }] };
+
+    expect(stillToCheck(progress)).toEqual(["b.html"]);
+  });
+
+  it("treats a change recorded before sweeps existed as covering nothing", () => {
     const progress = { changes: [{ files: ["a.html"] }] };
 
-    expect(remainingFiles(readJob(root), progress)).toEqual(["b.html"]);
+    expect(stillToCheck(progress)).toEqual(["a.html", "b.html"]);
   });
 
   it("is empty when every file is covered", async () => {
     await main([root], onePass(), { runLuna: luna() });
 
-    expect(remainingFiles(readJob(root), readProgress(root))).toEqual([]);
+    expect(stillToCheck()).toEqual([]);
+  });
+
+  it("counts only the sweep in progress", () => {
+    const progress = {
+      changes: [
+        { sweep: 1, files: ["a.html", "b.html"] },
+        { sweep: 2, files: ["a.html"] },
+      ],
+    };
+
+    expect(stillToCheck(progress)).toEqual(["b.html"]);
+    expect(stillToCheck(progress, 1)).toEqual([]);
   });
 });

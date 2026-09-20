@@ -4,7 +4,7 @@ import path from "node:path";
 import { decodeHtml } from "./html.js";
 import { extractRelatedPartWithLuna } from "./pipeline/extractElement.js";
 import { buildChangeRequest, checkDeterminism, narrowChangeWithLuna } from "./pipeline/narrowChange.js";
-import { CHANGES_DIRECTORY, processedFiles, recordChange, writeChangeScript } from "./pipeline/progress.js";
+import { CHANGES_DIRECTORY, currentSweep, recordChange, writeChangeScript } from "./pipeline/progress.js";
 import { buildReplacementScript, changeSlug } from "./pipeline/replacementScript.js";
 
 const SKIPPED = new Set([CHANGES_DIRECTORY, ".git", ".omc", ".omx", "node_modules"]);
@@ -27,14 +27,16 @@ export function readJob(workspace) {
   };
 }
 
-export function remainingFiles(job, progress) {
-  const done = new Set(processedFiles(progress));
-  return job.files.map((file) => file.id).filter((id) => !done.has(id));
+export function remainingJob(job, progress, sweep = currentSweep(progress)) {
+  const swept = progress.changes.filter((change) => change.sweep === sweep);
+  const done = new Set(swept.flatMap((change) => change.files ?? []));
+  return { root: job.root, files: job.files.filter((file) => !done.has(file.id)) };
 }
 
 export async function proposeChange(job, find, options = {}) {
   if (!find?.trim()) throw new Error("A find phase is required.");
   const seed = job.files[0];
+  if (!seed) throw new Error("No file is left to check in this sweep.");
   const element = await extractRelatedPartWithLuna(seed.source, { ...options, text: find });
   return { seed, find, element };
 }
@@ -58,7 +60,8 @@ function runChangeScript(root, script, { run = execFileSync } = {}) {
   }
 }
 
-export function commitChange(job, progress, { instruction, proposal, narrowed }, options = {}) {
+export function commitChange(job, progress, { instruction, proposal, narrowed, sweep }, options = {}) {
+  if (typeof sweep !== "number") throw new Error("A sweep number is required.");
   const name = changeSlug(proposal.find, progress.changes.length + 1);
   const script = path.relative(job.root, writeChangeScript(job.root, name, buildReplacementScript({
     request: narrowed.request,
@@ -75,6 +78,7 @@ export function commitChange(job, progress, { instruction, proposal, narrowed },
   const spanBytes = narrowed.change.from.length;
   const next = recordChange(job.root, progress, {
     at: new Date().toISOString(),
+    sweep,
     instruction,
     find: proposal.find,
     replacement: narrowed.replacement,

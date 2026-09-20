@@ -13,10 +13,8 @@ export function readProgress(workspace) {
   return parsed;
 }
 
-export function processedFiles(progress) {
-  const seen = new Set();
-  for (const change of progress.changes) for (const file of change.files ?? []) seen.add(file);
-  return [...seen].sort();
+export function currentSweep(progress) {
+  return progress.changes.at(-1)?.sweep ?? 1;
 }
 
 export function recordChange(workspace, progress, entry) {
@@ -35,6 +33,7 @@ function truncate(value, limit = 100) {
 function formatLogEntry(entry) {
   const lines = [`## ${entry.at} — ${truncate(entry.request)}`, ""];
   if (entry.instruction) lines.push(`- asked: ${truncate(entry.instruction, 200)}`);
+  lines.push(`- sweep: ${entry.sweep}`);
   lines.push(`- find: ${truncate(entry.find, 200)}`);
   lines.push(`- replace with: ${truncate(entry.replacement, 200)}`);
   lines.push(`- seed: \`${entry.seed}\``);
