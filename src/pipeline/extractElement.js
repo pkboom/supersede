@@ -46,7 +46,9 @@ export async function extractRelatedPartWithLuna(source, { text, model = DEFAULT
     throw new Error("Luna returned an invalid related-part selection.");
   }
   if (response.status !== "found") {
-    throw new Error(response.reason || "Luna could not establish a related part.");
+    throw Object.assign(new Error(response.reason || "Luna could not establish a related part."), {
+      status: response.status,
+    });
   }
   const element = view.elements.get(response.elementId);
   if (!element) throw new Error(`Luna selected unknown element ${response.elementId}.`);

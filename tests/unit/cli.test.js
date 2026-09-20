@@ -81,6 +81,17 @@ function onePass(overrides = {}) {
   return asking({ instructions: [INSTRUCTION], ...overrides });
 }
 
+async function saying(run) {
+  const said = [];
+  const log = vi.spyOn(console, "log").mockImplementation((line) => said.push(line));
+  try {
+    await run();
+  } finally {
+    log.mockRestore();
+  }
+  return said;
+}
+
 describe("interactive flow", () => {
   it("reads the job and skips the changes folder", () => {
     mkdirSync(join(root, "changes"));
@@ -148,22 +159,79 @@ describe("interactive flow", () => {
     expect(readProgress(root).changes).toHaveLength(1);
   });
 
-  it("asks again when Luna cannot find the element", async () => {
-    const ask = asking({ instructions: [INSTRUCTION, INSTRUCTION], looksRight: [true], again: [true, false] });
+  it("seeds from the next file when the first one holds no element", async () => {
     let found = 0;
     const runLuna = async (call) => {
       if (call.schema.properties.status.enum.includes("found")) {
         found += 1;
         if (found === 1) return { status: "not_found", elementId: "", reason: "no footer in this email" };
+        return { status: "found", elementId: footerId(read("b.html")), reason: "x" };
+      }
+      return luna()(call);
+    };
+
+    const said = await saying(() => main([root], onePass(), { runLuna }));
+
+    const change = readProgress(root).changes[0];
+    expect(found).toBe(2);
+    expect(change.seed).toBe("b.html");
+    expect(change.files).toEqual(["a.html", "b.html"]);
+    expect(said).toContain("\nLuna found no element in a.html: no footer in this email");
+  });
+
+  it("names every file the walk passed over before it refuses", async () => {
+    const ask = asking({ instructions: [INSTRUCTION], again: [false] });
+    const runLuna = async (call) => {
+      if (call.schema.properties.status.enum.includes("found")) {
+        return { status: "not_found", elementId: "", reason: "no footer in this email" };
+      }
+      return luna()(call);
+    };
+
+    const said = await saying(() => main([root], ask, { runLuna }));
+
+    expect(said).toContain("\nLuna found no element in a.html: no footer in this email");
+    expect(said).toContain("\nLuna found no element in b.html: no footer in this email");
+    expect(said).toContain("\nI could not make that change: no file still to check holds the element for that request");
+  });
+
+  it("asks again once no file still to check holds the element", async () => {
+    const ask = asking({ instructions: [INSTRUCTION, INSTRUCTION], looksRight: [true], again: [true, false] });
+    let found = 0;
+    const runLuna = async (call) => {
+      if (call.schema.properties.status.enum.includes("found")) {
+        found += 1;
+        if (found <= 2) return { status: "not_found", elementId: "", reason: "no footer in this email" };
       }
       return luna()(call);
     };
 
     const result = await main([root], ask, { runLuna });
 
+    expect(found).toBe(3);
     expect(result.stopped).toBe(false);
     expect(ask.instruction).toHaveBeenCalledTimes(2);
     expect(readProgress(root).changes).toHaveLength(1);
+  });
+
+  it("stops the scan when a file holds two equally plausible elements", async () => {
+    const ask = asking({ instructions: [INSTRUCTION, INSTRUCTION], looksRight: [true], again: [true, false] });
+    let found = 0;
+    const runLuna = async (call) => {
+      if (call.schema.properties.status.enum.includes("found")) {
+        found += 1;
+        if (found === 1) return { status: "review", elementId: "", reason: "two footers are equally plausible" };
+      }
+      return luna()(call);
+    };
+
+    const said = await saying(() => main([root], ask, { runLuna }));
+
+    expect(found).toBe(2);
+    expect(readProgress(root).changes).toHaveLength(1);
+    expect(said).toContain(
+      "\nI could not make that change: two footers are equally plausible (a.html, and the files after it were not checked)",
+    );
   });
 
   it("asks again when Luna cannot narrow the change", async () => {

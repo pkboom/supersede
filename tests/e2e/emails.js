@@ -106,6 +106,7 @@ export const SHAPES = [
   { name: "1 file, not found in first file", present: [false] },
   { name: "2 files, found in first file and second file", present: [true, true] },
   { name: "2 files, found in first file, not found in second file", present: [true, false] },
+  { name: "2 files, not found in first file, found in second file", present: [false, true] },
   {
     name: "3 files, found in first file, not found in second file, and found in third file",
     present: [true, false, true],

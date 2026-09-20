@@ -104,7 +104,10 @@ export async function main(args = process.argv.slice(2), ask = askForInput, opti
         console.log(`\nNote: what I search for still carries ${JSON.stringify(replacement)}. The email does not contain it yet, so check the element below is the one you meant.`);
       }
 
-      proposal = await proposeChange(scope, find, options);
+      proposal = await proposeChange(scope, find, {
+        ...options,
+        onMiss: (file, why) => console.log(`\nLuna found no element in ${file}: ${why}`),
+      });
       console.log(`\nElement from ${proposal.seed.id} (${proposal.element.tagName}, ${proposal.element.html.length} bytes):\n`);
       console.log(proposal.element.html);
 

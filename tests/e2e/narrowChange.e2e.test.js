@@ -51,13 +51,14 @@ describe.skipIf(!hasKey)("extract pattern against Luna", () => {
         it(shape.name, async () => {
           const job = writeJob(group, shape.present);
 
-          if (!shape.present[0]) {
+          const seeds = shape.present.indexOf(true);
+          if (seeds === -1) {
             await expect(proposeChange(job, group.find)).rejects.toThrow();
             return;
           }
 
           const proposal = await proposeChange(job, group.find);
-          expect(proposal.seed.id).toBe(fileName(0));
+          expect(proposal.seed.id).toBe(fileName(seeds));
           for (const marker of group.elementCarries) carries(proposal.element.html, marker);
 
           const narrowed = await narrowProposal(job, proposal, group.replacement);

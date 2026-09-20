@@ -33,12 +33,25 @@ export function remainingJob(job, progress, sweep = currentSweep(progress)) {
   return { root: job.root, files: job.files.filter((file) => !done.has(file.id)) };
 }
 
-export async function proposeChange(job, find, options = {}) {
+export async function proposeChange(job, find, { onMiss, ...options } = {}) {
   if (!find?.trim()) throw new Error("A find phase is required.");
-  const seed = job.files[0];
-  if (!seed) throw new Error("No file is left to check in this sweep.");
-  const element = await extractRelatedPartWithLuna(seed.source, { ...options, text: find });
-  return { seed, find, element };
+  if (!job.files.length) throw new Error("No file is left to check in this sweep.");
+  for (const [index, seed] of job.files.entries()) {
+    try {
+      const element = await extractRelatedPartWithLuna(seed.source, { ...options, text: find });
+      return { seed, find, element };
+    } catch (error) {
+      if (error?.status === "not_found") {
+        onMiss?.(seed.id, error.message);
+        continue;
+      }
+      if (!error?.status) throw error;
+      const rest = job.files.length - index - 1;
+      const where = rest ? `${seed.id}, and the files after it were not checked` : seed.id;
+      throw Object.assign(new Error(`${error.message} (${where})`), { status: error.status });
+    }
+  }
+  throw new Error("no file still to check holds the element for that request");
 }
 
 export async function narrowProposal(job, proposal, replacement, options = {}) {

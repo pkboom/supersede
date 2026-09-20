@@ -43,6 +43,21 @@ describe("Luna related-part extraction", () => {
     expect(prompt).toContain("User request: TRACK YOUR ORDER");
   });
 
+  it("tags a not-found answer so the caller can try the next file", async () => {
+    const miss = await extractRelatedPartWithLuna(`<p>Hello</p>`, {
+      text: "the footer address",
+      runLuna: async () => ({ status: "not_found", elementId: "", reason: "no footer in this email" }),
+    }).catch((error) => error);
+    const ambiguous = await extractRelatedPartWithLuna(`<p>Hello</p>`, {
+      text: "the footer address",
+      runLuna: async () => ({ status: "review", elementId: "", reason: "two footers are equally plausible" }),
+    }).catch((error) => error);
+
+    expect(miss.status).toBe("not_found");
+    expect(miss.message).toBe("no footer in this email");
+    expect(ambiguous.status).toBe("review");
+  });
+
   it("rejects a hallucinated element ID", async () => {
     await expect(extractRelatedPartWithLuna(`<p>Hello</p>`, {
       text: "Hello",
