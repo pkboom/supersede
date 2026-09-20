@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { confirm, input } from "@inquirer/prompts";
+import { confirm, input, select } from "@inquirer/prompts";
 import { commitChange, narrowProposal, proposeChange, readJob, remainingJob } from "./job.js";
 import { replacementLanded } from "./pipeline/narrowChange.js";
 import { currentSweep, readProgress } from "./pipeline/progress.js";
@@ -46,7 +46,14 @@ const askForInput = {
   instruction: () => input({ message: "What should I change?", required: true }),
   looksRight: () => confirm({ message: "Does this element look right?", default: true }),
   again: () => confirm({ message: "Another change?", default: true }),
-  continueSweep: () => confirm({ message: "Describe the change for the files left?", default: true }),
+  nextStep: () => select({
+    message: "Some files were not updated. What next?",
+    choices: [
+      { name: "Describe the change for the variation in those files", value: "variations" },
+      { name: "Leave them and start the next sweep", value: "sweep" },
+      { name: "Stop", value: "stop" },
+    ],
+  }),
 };
 
 export async function main(args = process.argv.slice(2), ask = askForInput, options = {}) {
@@ -57,8 +64,13 @@ export async function main(args = process.argv.slice(2), ask = askForInput, opti
 
   async function nextRequest() {
     const left = scope.files.length;
-    if (left && left < job.files.length && await ask.continueSweep()) return true;
-    if (!await ask.again()) return false;
+    if (left && left < job.files.length) {
+      const step = await ask.nextStep();
+      if (step === "variations") return true;
+      if (step === "stop") return false;
+    } else if (!await ask.again()) {
+      return false;
+    }
     if (left !== job.files.length) {
       sweep += 1;
       scope = job;

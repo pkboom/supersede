@@ -12,7 +12,7 @@ The flow `src/cli.js` drives, one change per pass:
 flowchart TD
     run(["node src/cli.js"]) --> read["read the job, the HTML files in asset/JOB"]
     read --> resume{"files left from an unfinished sweep?"}
-    resume -->|yes| carry{"carry on?"}
+    resume -->|yes| choose{"tackle the variation, or move on?"}
     resume -->|no| ask["ask for one change request"]
 
     ask --> split["split into two phases, what to find and what it becomes"]
@@ -33,17 +33,18 @@ flowchart TD
     split -.->|cannot split| refused
     extract -.->|cannot find it| refused
     narrow -.->|cannot narrow it| refused
+    refused --> mid{"files left in this sweep?"}
+    mid -->|yes| choose
+    mid -->|no| again{"another change?"}
 
-    warn --> carry
-    complete --> carry
-    refused --> carry
+    warn --> choose
+    choose -->|describe the change for those files| ask
+    choose -->|leave them, next sweep| opened["open the next sweep, every file pending again"]
+    choose -->|stop| done(["stop"])
 
-    carry -->|describe the change for the files left| ask
-    carry -->|another change| opened["open the next sweep, every file pending again"]
-    carry -->|no| done(["stop"])
+    complete --> again
+    again -->|yes| opened
+    again -->|no| done
     opened --> ask
 ```
-
-The first branch out of `carry on?` is offered only while a sweep has files
-left; a complete sweep goes straight to the second.
 

@@ -17,11 +17,14 @@ goal for the variation. So a later pass seeds extraction from the first file
 still to check, not the job's first file, which by then already carries the new
 value — and judges determinism against those files alone.
 
-The sweep closes when every file is updated. Only then does "another change"
-open sweep 2, with every file pending again. Declining the files left reaches
-that same prompt, so nothing traps the loop. Giving up only reaches
-`progress.json` with the next recorded change: give up and quit, and the next
-run resumes where it left off.
+A pass that leaves files behind asks what to do with them: describe the change
+for the variation they hold, leave them and start the next sweep, or stop. A
+sweep that covered every file is offered another change instead, which opens the
+next one with every file pending again. Nothing can hold a job open on a file
+that has nothing to change.
+
+Leaving files behind only reaches `progress.json` with the next recorded change:
+move on and then quit, and the next run resumes where it left off.
 
 `progress.json` records `sweep` per change, and only changes that declare one
 count towards a sweep's coverage: a job recorded before sweeps existed opens a

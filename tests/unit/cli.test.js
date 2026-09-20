@@ -61,19 +61,19 @@ function luna({ from = OLD, to = REPLACEMENT, seen = [], find = FIND, replacemen
   };
 }
 
-function asking({ instructions, looksRight = [true], again = [false], continueSweep = [false] }) {
+function asking({ instructions, looksRight = [true], again = [false], nextStep = ["stop"] }) {
   const queue = {
     instructions: [...instructions],
     looksRight: [...looksRight],
     again: [...again],
-    continueSweep: [...continueSweep],
+    nextStep: [...nextStep],
   };
   return {
     workspace: vi.fn(async () => root),
     instruction: vi.fn(async () => queue.instructions.shift()),
     looksRight: vi.fn(async () => queue.looksRight.shift()),
     again: vi.fn(async () => queue.again.shift()),
-    continueSweep: vi.fn(async () => queue.continueSweep.shift()),
+    nextStep: vi.fn(async () => queue.nextStep.shift()),
   };
 }
 
@@ -201,7 +201,7 @@ describe("interactive flow", () => {
 
     await main([root], ask, { runLuna: luna() });
 
-    expect(ask.continueSweep).not.toHaveBeenCalled();
+    expect(ask.nextStep).not.toHaveBeenCalled();
     expect(ask.again).toHaveBeenCalledTimes(1);
   });
 
@@ -368,7 +368,7 @@ describe("a sweep the first pass does not finish", () => {
   }
 
   function leaveVariation() {
-    return main([root], asking({ instructions: [INSTRUCTION], continueSweep: [false], again: [false] }), {
+    return main([root], asking({ instructions: [INSTRUCTION], nextStep: ["stop"] }), {
       runLuna: variationLuna(),
     });
   }
@@ -377,14 +377,14 @@ describe("a sweep the first pass does not finish", () => {
     return asking({
       instructions: [INSTRUCTION, INSTRUCTION],
       looksRight: [true, true],
-      continueSweep: [true],
+      nextStep: ["variations"],
       again: [false],
       ...overrides,
     });
   }
 
   it("applies the change to the files it matches and leaves the variation pending", async () => {
-    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false] });
+    const ask = asking({ instructions: [INSTRUCTION], nextStep: ["stop"] });
 
     const result = await main([root], ask, { runLuna: variationLuna() });
 
@@ -397,28 +397,21 @@ describe("a sweep the first pass does not finish", () => {
     expect(stillToCheck()).toEqual(["c.html"]);
   });
 
-  it("offers the files left before offering another change", async () => {
-    const order = [];
-    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false] });
-    for (const name of ["continueSweep", "again"]) {
-      const original = ask[name];
-      ask[name] = vi.fn(async () => {
-        order.push(name);
-        return original();
-      });
-    }
+  it("asks what to do about the files left instead of asking for another change", async () => {
+    const ask = asking({ instructions: [INSTRUCTION], nextStep: ["stop"] });
 
     await main([root], ask, { runLuna: variationLuna() });
 
-    expect(order).toEqual(["continueSweep", "again"]);
+    expect(ask.nextStep).toHaveBeenCalledTimes(1);
+    expect(ask.again).not.toHaveBeenCalled();
   });
 
   it("opens a new sweep when the human gives up on the files left", async () => {
     const ask = asking({
       instructions: [INSTRUCTION, INSTRUCTION],
       looksRight: [true, true],
-      continueSweep: [false],
-      again: [true, false],
+      nextStep: ["sweep"],
+      again: [false],
     });
     const runLuna = variationLuna({ spans: [[OLD, REPLACEMENT], [FOOTER, SHORT_FOOTER]] });
 
@@ -444,7 +437,7 @@ describe("a sweep the first pass does not finish", () => {
     await leaveVariation();
 
     const seen = [];
-    await main([root], asking({ instructions: [INSTRUCTION], continueSweep: [true], again: [false] }), {
+    await main([root], asking({ instructions: [INSTRUCTION], nextStep: ["variations"], again: [false] }), {
       runLuna: variationLuna({ seen, spans: [[VARIANT, REPLACEMENT]] }),
     });
 
@@ -457,10 +450,10 @@ describe("a sweep the first pass does not finish", () => {
   it("asks before scoping a resumed session to the files left", async () => {
     await leaveVariation();
 
-    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [false], again: [true, false] });
+    const ask = asking({ instructions: [INSTRUCTION], nextStep: ["sweep"], again: [false] });
     await main([root], ask, { runLuna: variationLuna({ spans: [[FOOTER, SHORT_FOOTER]] }) });
 
-    expect(ask.continueSweep).toHaveBeenCalledTimes(1);
+    expect(ask.nextStep).toHaveBeenCalledTimes(1);
     const progress = readProgress(root);
     expect(progress.changes.map((change) => change.sweep)).toEqual([1, 2]);
     expect(progress.changes[1].files).toEqual(["a.html", "b.html", "c.html"]);
@@ -469,7 +462,7 @@ describe("a sweep the first pass does not finish", () => {
   it("leaves a resumed session alone when the human keeps the sweep", async () => {
     await leaveVariation();
 
-    const ask = asking({ instructions: [INSTRUCTION], continueSweep: [true], again: [false] });
+    const ask = asking({ instructions: [INSTRUCTION], nextStep: ["variations"], again: [false] });
     await main([root], ask, { runLuna: variationLuna({ spans: [[VARIANT, REPLACEMENT]] }) });
 
     expect(readProgress(root).changes[1].files).toEqual(["c.html"]);
